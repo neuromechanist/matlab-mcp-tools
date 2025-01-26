@@ -9,6 +9,7 @@ import matlab.engine
 from mcp.server.fastmcp import Context
 
 from .models import ExecutionResult
+from .utils.section_parser import extract_section
 
 
 class MatlabEngine:
@@ -195,6 +196,49 @@ class MatlabEngine:
                 workspace[var] = f"<Error reading variable: {str(e)}>"
                 
         return workspace
+
+    async def execute_section(
+        self,
+        file_path: str,
+        section_range: tuple[int, int],
+        maintain_workspace: bool = True,
+        capture_plots: bool = True,
+        ctx: Optional[Context] = None
+    ) -> ExecutionResult:
+        """Execute a specific section of a MATLAB script.
+        
+        Args:
+            file_path: Path to the MATLAB script
+            section_range: Tuple of (start_line, end_line) for the section
+            maintain_workspace: Whether to maintain workspace between sections
+            capture_plots: Whether to capture generated plots
+            ctx: MCP context for progress reporting
+            
+        Returns:
+            ExecutionResult containing output, workspace state, and figures
+        """
+        script_path = Path(file_path)
+        if not script_path.exists():
+            raise FileNotFoundError(f"Script not found: {file_path}")
+            
+        # Extract the section code
+        section_code = extract_section(
+            script_path,
+            section_range[0],
+            section_range[1],
+            maintain_workspace
+        )
+        
+        if ctx:
+            ctx.info(f"Executing section (lines {section_range[0]}-{section_range[1]})")
+            
+        # Execute the section
+        return await self.execute(
+            section_code,
+            is_file=False,
+            capture_plots=capture_plots,
+            ctx=ctx
+        )
 
     def cleanup(self) -> None:
         """Clean up MATLAB engine and resources."""

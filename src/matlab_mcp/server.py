@@ -1,11 +1,12 @@
 """MATLAB MCP Server implementation."""
 
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 from mcp.server.fastmcp import FastMCP, Image, Context
 
 from .engine import MatlabEngine
+from .utils.section_parser import get_section_info
 
 
 class MatlabServer:
@@ -29,6 +30,71 @@ class MatlabServer:
     
     def _setup_tools(self):
         """Set up MCP tools for MATLAB operations."""
+
+        @self.mcp.tool()
+        async def get_script_sections(
+            script_name: str,
+            ctx: Context = None
+        ) -> List[dict]:
+            """Get information about sections in a MATLAB script.
+            
+            Args:
+                script_name: Name of the script (without .m extension)
+                ctx: MCP context for progress reporting
+            
+            Returns:
+                List of dictionaries containing section information
+            """
+            script_path = self.scripts_dir / f"{script_name}.m"
+            if not script_path.exists():
+                raise FileNotFoundError(f"Script {script_name}.m not found")
+                
+            if ctx:
+                ctx.info(f"Getting sections for script: {script_name}")
+                
+            return get_section_info(script_path)
+
+        @self.mcp.tool()
+        async def execute_script_section(
+            script_name: str,
+            section_range: tuple[int, int],
+            maintain_workspace: bool = True,
+            ctx: Context = None
+        ) -> Dict[str, Any]:
+            """Execute a specific section of a MATLAB script.
+            
+            Args:
+                script_name: Name of the script (without .m extension)
+                section_range: Tuple of (start_line, end_line) for the section
+                maintain_workspace: Whether to maintain workspace between sections
+                ctx: MCP context for progress reporting
+            
+            Returns:
+                Dictionary containing execution results
+            """
+            script_path = self.scripts_dir / f"{script_name}.m"
+            if not script_path.exists():
+                raise FileNotFoundError(f"Script {script_name}.m not found")
+                
+            result = await self.engine.execute_section(
+                str(script_path),
+                section_range,
+                maintain_workspace=maintain_workspace,
+                ctx=ctx
+            )
+            
+            # Convert raw bytes to MCP Image objects
+            figures = [
+                Image(data=fig_data, format='png')
+                for fig_data in result.figures
+            ]
+            
+            return {
+                "output": result.output,
+                "error": result.error,
+                "workspace": result.workspace,
+                "figures": figures
+            }
         
         @self.mcp.tool()
         async def execute_script(
