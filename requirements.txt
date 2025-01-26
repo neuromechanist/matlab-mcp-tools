@@ -1,0 +1,10 @@
+# Core dependencies
+mcp>=0.1.0
+matlabengine>=23.2.0
+
+# Development dependencies
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+black>=23.0.0
+flake8>=6.0.0
+mypy>=1.0.0

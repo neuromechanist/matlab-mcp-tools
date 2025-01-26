@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# MATLAB
+*.asv
+*.m~
+*.mex*
+slprj/
+sccprj/
+codegen/
+octave-workspace
+
+# Project specific
+matlab_output/
+test_output/
+matlab_scripts/
+
+# Development files
+examples/matlab_scripts/section_test.m
