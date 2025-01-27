@@ -18,7 +18,11 @@ class MatlabEngine:
     def __init__(self):
         """Initialize MATLAB engine wrapper."""
         self.eng = None
-        self.output_dir = Path("matlab_output")
+        # Use .mcp directory in home for all outputs
+        self.mcp_dir = Path.home() / ".mcp"
+        self.output_dir = self.mcp_dir / "matlab" / "output"
+        self.output_dir.parent.mkdir(parents=True, exist_ok=True)
+        self.output_dir.mkdir(exist_ok=True)
         self.matlab_path = os.getenv('MATLAB_PATH', '/Applications/MATLAB_R2024a.app')
         
     async def initialize(self) -> None:
@@ -28,9 +32,27 @@ class MatlabEngine:
             
         try:
             print("Starting MATLAB engine...", file=sys.stderr)
-            self.eng = matlab.engine.start_matlab()
+            print(f"MATLAB_PATH: {self.matlab_path}", file=sys.stderr)
+            print(f"Python executable: {sys.executable}", file=sys.stderr)
+            print(f"matlab.engine path: {matlab.engine.__file__}", file=sys.stderr)
+            
+            # Try to find all available MATLAB sessions
+            sessions = matlab.engine.find_matlab()
+            print(f"Available MATLAB sessions: {sessions}", file=sys.stderr)
+            
+            if sessions:
+                print("Connecting to existing MATLAB session...", file=sys.stderr)
+                self.eng = matlab.engine.connect_matlab(sessions[0])
+            else:
+                print("Starting new MATLAB session...", file=sys.stderr)
+                self.eng = matlab.engine.start_matlab()
+            
             if self.eng is None:
                 raise RuntimeError("MATLAB engine failed to start (returned None)")
+            
+            # Test basic MATLAB functionality
+            ver = self.eng.version()
+            print(f"Connected to MATLAB version: {ver}", file=sys.stderr)
             print("MATLAB engine started successfully", file=sys.stderr)
         except (ImportError, RuntimeError) as e:
             print(f"Error starting MATLAB engine: {str(e)}", file=sys.stderr)
@@ -270,7 +292,7 @@ class MatlabEngine:
             ctx=ctx
         )
 
-    def cleanup(self) -> None:
+    def close(self) -> None:
         """Clean up MATLAB engine and resources."""
         if self.eng is not None:
             self.eng.quit()

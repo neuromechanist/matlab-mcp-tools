@@ -1,5 +1,8 @@
 """MATLAB MCP Server implementation."""
 
+import logging
+import os
+import signal
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
@@ -7,6 +10,29 @@ from mcp.server.fastmcp import FastMCP, Image, Context
 
 from .engine import MatlabEngine
 from .utils.section_parser import get_section_info
+
+
+# Configure logging to avoid duplicate messages
+class DuplicateFilter(logging.Filter):
+    """Filter out duplicate log messages."""
+    def __init__(self):
+        super().__init__()
+        self.last_log = None
+        
+    def filter(self, record):
+        current_log = record.getMessage()
+        if current_log == self.last_log:
+            return False
+        self.last_log = current_log
+        return True
+
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+handler = logging.StreamHandler()
+handler.setFormatter(logging.Formatter('%(message)s'))
+handler.addFilter(DuplicateFilter())
+logger.handlers = [handler]  # Replace any existing handlers
 
 
 class MatlabServer:
@@ -19,10 +45,23 @@ class MatlabServer:
             dependencies=[
                 "mcp[cli]",
                 "matlabengine"
-            ]
+            ],
+            debug=False,  # Disable debug logging
+            capabilities={
+                "tools": {
+                    "listChanged": True
+                },
+                "resources": {
+                    "listChanged": True,
+                    "subscribe": True
+                }
+            }
         )
         self.engine = MatlabEngine()
-        self.scripts_dir = Path("matlab_scripts")
+        # Use .mcp directory in home for all files
+        self.mcp_dir = Path.home() / ".mcp"
+        self.scripts_dir = self.mcp_dir / "matlab" / "scripts"
+        self.scripts_dir.parent.mkdir(parents=True, exist_ok=True)
         self.scripts_dir.mkdir(exist_ok=True)
         
         self._setup_tools()
@@ -196,8 +235,30 @@ class MatlabServer:
             
             return script_path.read_text()
 
+    def close(self):
+        """Clean up server resources."""
+        print("\nShutting down MATLAB MCP Server...")
+        try:
+            if self.engine is not None:
+                self.engine.close()
+                self.engine = None
+            # Force kill any remaining MATLAB processes
+            os.system("pkill -f MATLAB")
+        except Exception as e:
+            print(f"Error during cleanup: {str(e)}")
+        finally:
+            os._exit(0)  # Force immediate exit, cannot be caught by other threads
+
     def run(self):
         """Run the MCP server."""
+        def signal_handler(signum, frame):
+            print("\nReceived signal to shutdown...")
+            self.close()  # This will call os._exit(0)
+            
+        # Set up signal handlers
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+        
         print("MATLAB MCP Server is running...")
         print("Available tools:")
         print("  - execute_script: Execute MATLAB code or script file")
@@ -206,7 +267,17 @@ class MatlabServer:
         print("  - create_matlab_script: Create a new MATLAB script")
         print("  - get_workspace: Get current MATLAB workspace variables")
         print("\nUse the tools with Cline or other MCP-compatible clients.")
-        self.mcp.run()
+        print("Press Ctrl+C to shutdown gracefully")
+        
+        try:
+            # Let FastMCP handle its own event loop
+            self.mcp.run(transport='stdio')
+        except KeyboardInterrupt:
+            print("\nReceived keyboard interrupt...")
+            self.close()  # This will call os._exit(0)
+        except Exception as e:
+            print(f"\nError: {str(e)}")
+            self.close()  # This will call os._exit(0)
 
 
 def main():

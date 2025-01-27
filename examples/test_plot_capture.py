@@ -15,9 +15,23 @@ from matlab_mcp.models import FigureFormat
 
 async def test_plot_capture():
     """Test plot capture in both PNG and SVG formats."""
-    # Check MATLAB environment
-    matlab_path = os.getenv('MATLAB_PATH')
+    # Set MATLAB environment
+    matlab_path = os.getenv('MATLAB_PATH', '/Applications/MATLAB_R2024a.app')
     print(f"MATLAB_PATH: {matlab_path}")
+    
+    # Ask user for correct MATLAB path if default doesn't exist
+    if not os.path.exists(matlab_path):
+        print(f"MATLAB not found at {matlab_path}")
+        print("Please enter the correct path to your MATLAB installation:")
+        matlab_path = input().strip()
+        if not matlab_path:
+            print("No path provided, exiting...")
+            return
+        if not os.path.exists(matlab_path):
+            print(f"Path {matlab_path} does not exist, exiting...")
+            return
+        os.environ['MATLAB_PATH'] = matlab_path
+        print(f"Set MATLAB_PATH to: {matlab_path}")
     
     server = MatlabServer()
     print("Created MatlabServer instance")
