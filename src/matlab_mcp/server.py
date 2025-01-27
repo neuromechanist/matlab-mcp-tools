@@ -7,6 +7,10 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List
 
 from mcp.server.fastmcp import FastMCP, Image, Context
+from mcp.types import (
+    Tool, Resource, ResourceTemplate,
+    ServerResult, ListToolsResult, ListResourcesResult, ListResourceTemplatesResult
+)
 
 from .engine import MatlabEngine
 from .utils.section_parser import get_section_info
@@ -40,6 +44,9 @@ class MatlabServer:
     
     def __init__(self):
         """Initialize the MATLAB MCP server."""
+        # Configure logging level to reduce debug noise
+        logging.getLogger('mcp').setLevel(logging.INFO)
+        
         self.mcp = FastMCP(
             "MATLAB",
             dependencies=[
@@ -57,6 +64,11 @@ class MatlabServer:
                 }
             }
         )
+        
+        # Set up core MCP protocol handlers
+        self.mcp._mcp_server.list_tools()(self._list_tools)
+        self.mcp._mcp_server.list_resources()(self._list_resources)
+        self.mcp._mcp_server.list_resource_templates()(self._list_resource_templates)
         self.engine = MatlabEngine()
         # Use .mcp directory in home for all files
         self.mcp_dir = Path.home() / ".mcp"
@@ -67,6 +79,89 @@ class MatlabServer:
         self._setup_tools()
         self._setup_resources()
     
+    async def _list_tools(self) -> ServerResult:
+        """Handle ListToolsRequest."""
+        tools = [
+            Tool(
+                name="execute_script",
+                description="Execute MATLAB code or script file",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "script": {"type": "string"},
+                        "is_file": {"type": "boolean"},
+                        "workspace_vars": {"type": "object"}
+                    },
+                    "required": ["script"]
+                }
+            ),
+            Tool(
+                name="execute_script_section",
+                description="Execute specific sections of a MATLAB script",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "script_name": {"type": "string"},
+                        "section_range": {
+                            "type": "array",
+                            "items": {"type": "integer"},
+                            "minItems": 2,
+                            "maxItems": 2
+                        },
+                        "maintain_workspace": {"type": "boolean"}
+                    },
+                    "required": ["script_name", "section_range"]
+                }
+            ),
+            Tool(
+                name="get_script_sections",
+                description="Get information about sections in a MATLAB script",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "script_name": {"type": "string"}
+                    },
+                    "required": ["script_name"]
+                }
+            ),
+            Tool(
+                name="create_matlab_script",
+                description="Create a new MATLAB script",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "script_name": {"type": "string"},
+                        "code": {"type": "string"}
+                    },
+                    "required": ["script_name", "code"]
+                }
+            ),
+            Tool(
+                name="get_workspace",
+                description="Get current MATLAB workspace variables",
+                inputSchema={
+                    "type": "object",
+                    "properties": {}
+                }
+            )
+        ]
+        return ServerResult(ListToolsResult(tools=tools))
+
+    async def _list_resources(self) -> ServerResult:
+        """Handle ListResourcesRequest."""
+        return ServerResult(ListResourcesResult(resources=[]))  # We don't have static resources
+
+    async def _list_resource_templates(self) -> ServerResult:
+        """Handle ListResourceTemplatesRequest."""
+        templates = [
+            ResourceTemplate(
+                uriTemplate="matlab://scripts/{script_name}",
+                name="MATLAB Script",
+                description="Get the content of a MATLAB script"
+            )
+        ]
+        return ServerResult(ListResourceTemplatesResult(resourceTemplates=templates))
+
     def _setup_tools(self):
         """Set up MCP tools for MATLAB operations."""
 
@@ -259,18 +354,24 @@ class MatlabServer:
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
         
+        # Print available tools
+        tools = [
+            "execute_script: Execute MATLAB code or script file",
+            "execute_script_section: Execute specific sections of a MATLAB script",
+            "get_script_sections: Get information about script sections",
+            "create_matlab_script: Create a new MATLAB script",
+            "get_workspace: Get current MATLAB workspace variables"
+        ]
+        
         print("MATLAB MCP Server is running...")
         print("Available tools:")
-        print("  - execute_script: Execute MATLAB code or script file")
-        print("  - execute_script_section: Execute specific sections of a MATLAB script")
-        print("  - get_script_sections: Get information about script sections")
-        print("  - create_matlab_script: Create a new MATLAB script")
-        print("  - get_workspace: Get current MATLAB workspace variables")
+        for tool in tools:
+            print(f"  - {tool}")
         print("\nUse the tools with Cline or other MCP-compatible clients.")
         print("Press Ctrl+C to shutdown gracefully")
         
         try:
-            # Let FastMCP handle its own event loop
+            # Let FastMCP handle protocol messages and event loop
             self.mcp.run(transport='stdio')
         except KeyboardInterrupt:
             print("\nReceived keyboard interrupt...")
