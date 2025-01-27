@@ -1,13 +1,11 @@
 # MATLAB MCP Tool
 
-A Model Context Protocol (MCP) server that provides tools for developing, running, and debugging MATLAB files. This tool integrates with Cline and other MCP-compatible clients to provide interactive MATLAB development capabilities.
+A Model Context Protocol (MCP) server that provides tools for developing and running MATLAB files. This tool integrates with Cline and other MCP-compatible clients to provide interactive MATLAB development capabilities.
 
 ## Prerequisites
 
 - Python 3.8+
 - MATLAB with Python Engine installed
-- MCP SDK for Python (`pip install modelcontextprotocol`)
-- MATLAB Engine for Python (`pip install matlabengine`)
 
 ## Features
 
@@ -17,12 +15,7 @@ A Model Context Protocol (MCP) server that provides tools for developing, runnin
    - Maintain workspace context between executions
    - Capture and display plots
 
-2. **Interactive Debugging**
-   - Set breakpoints in MATLAB scripts
-   - Debug script execution
-   - Inspect workspace variables
-
-3. **Section-based Execution**
+2. **Section-based Execution**
    - Execute specific sections of MATLAB files
    - Support for cell mode (%% delimited sections)
    - Maintain workspace context between sections
@@ -32,7 +25,7 @@ A Model Context Protocol (MCP) server that provides tools for developing, runnin
 1. Clone this repository:
 ```bash
 git clone [repository-url]
-cd matlab-mcp-tool
+cd matlab-mcp-tools
 ```
 
 2. Create and activate a conda environment:
@@ -41,16 +34,30 @@ conda create -n matlab-mcp python=3.8
 conda activate matlab-mcp
 ```
 
-3. Install dependencies:
+3. Install the package and its dependencies:
 ```bash
-pip install modelcontextprotocol matlabengine
+pip install -e .
+```
+
+4. Install MATLAB Engine for Python:
+```bash
+# Navigate to MATLAB engine directory
+cd /Applications/MATLAB_R2024b.app/extern/engines/python
+
+# Install MATLAB engine
+python setup.py install
+```
+
+5. Add MATLAB to system PATH:
+```bash
+export PATH="/Applications/MATLAB_R2024b.app/:$PATH"
 ```
 
 ## Usage
 
 1. Start the MCP server:
 ```bash
-python src/matlab_bridge.py
+python -m matlab_mcp.server
 ```
 
 2. Configure Cline to use the MATLAB MCP server by adding to your Cline configuration:
@@ -59,7 +66,7 @@ python src/matlab_bridge.py
   "mcpServers": {
     "matlab": {
       "command": "python",
-      "args": ["/path/to/matlab-mcp-tool/src/matlab_bridge.py"],
+      "args": ["-m", "matlab_mcp.server"],
       "env": {
         "PYTHONPATH": "/path/to/matlab/engine/installation"
       }
@@ -87,26 +94,114 @@ python src/matlab_bridge.py
   }
   ```
 
-- **debug_matlab_script**
-  ```json
-  {
-    "script": "debug_script.m",
-    "breakpoints": [5, 10, 15]
-  }
-  ```
+## Examples
+
+### 1. Simple Script Execution with Plot
+
+This example demonstrates running a complete MATLAB script that generates a plot:
+
+```matlab
+% test_plot.m
+x = linspace(0, 2*pi, 100);
+y = sin(x);
+
+% Create a figure with some styling
+figure;
+plot(x, y, 'LineWidth', 2);
+title('Sine Wave');
+xlabel('x');
+ylabel('sin(x)');
+grid on;
+
+% Add some annotations
+text(pi, 0, '\leftarrow \pi', 'FontSize', 12);
+```
+
+To execute this script using the MCP tool:
+```json
+{
+    "script": "test_plot.m",
+    "isFile": true
+}
+```
+
+The tool will execute the script and capture the generated plot, saving it to the output directory.
+
+### 2. Section-Based Execution
+
+This example shows how to execute specific sections of a MATLAB script:
+
+```matlab
+%% Section 1: Data Generation
+% Generate sample data
+x = linspace(0, 10, 100);
+y = sin(x);
+
+fprintf('Generated %d data points\n', length(x));
+
+%% Section 2: Basic Statistics
+% Calculate basic statistics
+mean_y = mean(y);
+std_y = std(y);
+max_y = max(y);
+min_y = min(y);
+
+fprintf('Statistics:\n');
+fprintf('Mean: %.4f\n', mean_y);
+fprintf('Std Dev: %.4f\n', std_y);
+fprintf('Max: %.4f\n', max_y);
+fprintf('Min: %.4f\n', min_y);
+
+%% Section 3: Plotting
+% Create visualization
+figure('Position', [100, 100, 800, 400]);
+
+subplot(1, 2, 1);
+plot(x, y, 'b-', 'LineWidth', 2);
+title('Signal');
+xlabel('x');
+ylabel('y');
+grid on;
+
+subplot(1, 2, 2);
+histogram(y, 20);
+title('Distribution');
+xlabel('Value');
+ylabel('Count');
+grid on;
+
+sgtitle('Signal Analysis');
+```
+
+To execute specific sections:
+```json
+{
+    "filePath": "section_test.m",
+    "sectionStart": 1,
+    "sectionEnd": 2
+}
+```
+
+This will run sections 1 and 2, generating the data and calculating statistics. The output will include:
+```
+Generated 100 data points
+Statistics:
+Mean: 0.0000
+Std Dev: 0.7071
+Max: 1.0000
+Min: -1.0000
+```
 
 ## Output Directory
 
-The tool creates an `output` directory in the current working directory to store:
+The tool creates `matlab_output` and `test_output` directories to store:
 - Plot images generated during script execution
-- Debug output files
 - Other temporary files
 
 ## Error Handling
 
 - Script execution errors are captured and returned with detailed error messages
 - Workspace state is preserved even after errors
-- Debug sessions are properly cleaned up
 
 ## Contributing
 

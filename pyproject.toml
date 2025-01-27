@@ -3,7 +3,7 @@ name = "matlab-mcp-tools"
 version = "0.1.0"
 description = "MCP server for MATLAB integration with Cline"
 authors = [
-    { name = "Yahya" }
+    { name = "Seyed Yahya Shirazi", email = "shirazi@ieee.org" }
 ]
 dependencies = [
     "mcp[cli]>=0.1.0",
