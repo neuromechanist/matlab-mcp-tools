@@ -45,10 +45,6 @@ octave-workspace
 # Project specific
 matlab_output/
 test_output/
-matlab_scripts/
-
-# Development files
-examples/matlab_scripts/section_test.m
 
 # Jupyter
 .ipynb_checkpoints/
