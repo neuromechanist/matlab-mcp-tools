@@ -23,12 +23,13 @@ A Model Context Protocol (MCP) server that provides tools for developing and run
 ## Installation
 
 1. Clone this repository:
+
 ```bash
 git clone [repository-url]
 cd matlab-mcp-tools
 ```
 
-2. Create and activate a conda environment:
+2. Create and activate a Conda environment:
 ```bash
 conda create -n matlab-mcp python=3.8
 conda activate matlab-mcp
@@ -59,6 +60,7 @@ export PATH="/Applications/MATLAB_R2024b.app/:$PATH"
 ```bash
 python -m matlab_mcp.server
 ```
+
 You should see a startup message listing the available tools and confirming the server is running:
 ```
 MATLAB MCP Server is running...
@@ -72,7 +74,7 @@ Available tools:
 Use the tools with Cline or other MCP-compatible clients.
 ```
 
-2. Configure Cline to use the MATLAB MCP server by adding to your Cline configuration:
+2. Alternatively, configure Cline to use the MATLAB MCP server by adding to your Cline configuration:
 ```json
 {
   "mcpServers": {
@@ -86,6 +88,8 @@ Use the tools with Cline or other MCP-compatible clients.
   }
 }
 ```
+
+Hint: You can find the MATLAB engine installation path by running `python -c "import matlab; print(matlab.__file__)"`.
 
 3. Available Tools:
 
