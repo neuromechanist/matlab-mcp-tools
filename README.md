@@ -59,6 +59,18 @@ export PATH="/Applications/MATLAB_R2024b.app/:$PATH"
 ```bash
 python -m matlab_mcp.server
 ```
+You should see a startup message listing the available tools and confirming the server is running:
+```
+MATLAB MCP Server is running...
+Available tools:
+  - execute_script: Execute MATLAB code or script file
+  - execute_script_section: Execute specific sections of a MATLAB script
+  - get_script_sections: Get information about script sections
+  - create_matlab_script: Create a new MATLAB script
+  - get_workspace: Get current MATLAB workspace variables
+
+Use the tools with Cline or other MCP-compatible clients.
+```
 
 2. Configure Cline to use the MATLAB MCP server by adding to your Cline configuration:
 ```json

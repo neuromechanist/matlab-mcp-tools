@@ -198,6 +198,14 @@ class MatlabServer:
 
     def run(self):
         """Run the MCP server."""
+        print("MATLAB MCP Server is running...")
+        print("Available tools:")
+        print("  - execute_script: Execute MATLAB code or script file")
+        print("  - execute_script_section: Execute specific sections of a MATLAB script")
+        print("  - get_script_sections: Get information about script sections")
+        print("  - create_matlab_script: Create a new MATLAB script")
+        print("  - get_workspace: Get current MATLAB workspace variables")
+        print("\nUse the tools with Cline or other MCP-compatible clients.")
         self.mcp.run()
 
 
