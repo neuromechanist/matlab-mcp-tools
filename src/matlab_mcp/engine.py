@@ -8,7 +8,7 @@ from typing import Optional, Dict, Any, List
 import matlab.engine
 from mcp.server.fastmcp import Context
 
-from .models import ExecutionResult
+from .models import ExecutionResult, FigureData, FigureFormat
 from .utils.section_parser import extract_section
 
 
@@ -27,8 +27,13 @@ class MatlabEngine:
             return
             
         try:
+            print("Starting MATLAB engine...", file=sys.stderr)
             self.eng = matlab.engine.start_matlab()
-        except ImportError:
+            if self.eng is None:
+                raise RuntimeError("MATLAB engine failed to start (returned None)")
+            print("MATLAB engine started successfully", file=sys.stderr)
+        except (ImportError, RuntimeError) as e:
+            print(f"Error starting MATLAB engine: {str(e)}", file=sys.stderr)
             # Try to install MATLAB engine if not found
             if not os.path.exists(self.matlab_path):
                 raise RuntimeError(
@@ -53,6 +58,8 @@ class MatlabEngine:
                 )
                 print("MATLAB engine installed successfully.", file=sys.stderr)
                 self.eng = matlab.engine.start_matlab()
+                if self.eng is None:
+                    raise RuntimeError("MATLAB engine failed to start after installation")
             except subprocess.CalledProcessError as e:
                 raise RuntimeError(
                     f"Failed to install MATLAB engine: {e.stderr}\n"
@@ -63,7 +70,10 @@ class MatlabEngine:
         self.output_dir.mkdir(exist_ok=True)
         
         # Add current directory to MATLAB path
-        self.eng.addpath(str(Path.cwd()))
+        if self.eng is not None:
+            self.eng.addpath(str(Path.cwd()))
+        else:
+            raise RuntimeError("MATLAB engine is still None after initialization")
 
     async def execute(
         self,
@@ -142,24 +152,44 @@ class MatlabEngine:
                 figures=[]
             )
 
-    async def _capture_figures(self) -> List[bytes]:
-        """Capture current MATLAB figures as PNG images.
+    async def _capture_figures(self) -> List[FigureData]:
+        """Capture current MATLAB figures in both PNG and SVG formats.
         
         Returns:
-            List of PNG image data for each figure
+            List of FigureData containing both PNG and SVG versions of each figure
         """
         figures = []
         fig_handles = self.eng.eval('get(groot, "Children")', nargout=1)
         
         if fig_handles:
             for i, _ in enumerate(fig_handles):
-                temp_file = self.output_dir / f"figure_{i}.png"
-                self.eng.eval(f"saveas(figure({i+1}), '{temp_file}')", nargout=0)
+                figure_data = []
                 
-                with open(temp_file, 'rb') as f:
-                    figures.append(f.read())
+                # Save as PNG
+                png_file = self.output_dir / f"figure_{i}.png"
+                self.eng.eval(f"saveas(figure({i+1}), '{png_file}')", nargout=0)
+                with open(png_file, 'rb') as f:
+                    figure_data.append(FigureData(
+                        data=f.read(),
+                        format=FigureFormat.PNG
+                    ))
+                png_file.unlink()
                 
-                temp_file.unlink()  # Clean up temp file
+                # Save as SVG
+                svg_file = self.output_dir / f"figure_{i}.svg"
+                self.eng.eval(
+                    f"set(figure({i+1}), 'Renderer', 'painters'); "
+                    f"saveas(figure({i+1}), '{svg_file}', 'svg')",
+                    nargout=0
+                )
+                with open(svg_file, 'rb') as f:
+                    figure_data.append(FigureData(
+                        data=f.read(),
+                        format=FigureFormat.SVG
+                    ))
+                svg_file.unlink()
+                
+                figures.extend(figure_data)
                 
         return figures
 

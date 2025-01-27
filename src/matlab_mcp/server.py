@@ -83,10 +83,10 @@ class MatlabServer:
                 ctx=ctx
             )
             
-            # Convert raw bytes to MCP Image objects
+            # Convert FigureData to MCP Image objects
             figures = [
-                Image(data=fig_data, format='png')
-                for fig_data in result.figures
+                Image(data=fig.data, format=fig.format.value)
+                for fig in result.figures
             ]
             
             return {
@@ -121,10 +121,10 @@ class MatlabServer:
                 ctx=ctx
             )
             
-            # Convert raw bytes to MCP Image objects
+            # Convert FigureData to MCP Image objects
             figures = [
-                Image(data=fig_data, format='png')
-                for fig_data in result.figures
+                Image(data=fig.data, format=fig.format.value)
+                for fig in result.figures
             ]
             
             return {

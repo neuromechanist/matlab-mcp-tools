@@ -1,7 +1,18 @@
 """Data models for MATLAB MCP Tool."""
 
-from typing import Any, Dict, List, Optional, Tuple
+from enum import Enum
+from typing import Any, Dict, List, Optional, Tuple, Union
 from pydantic import BaseModel, Field
+
+class FigureFormat(str, Enum):
+    """Supported figure formats."""
+    PNG = 'png'
+    SVG = 'svg'
+
+class FigureData(BaseModel):
+    """Model for figure data."""
+    data: bytes = Field(description="Raw figure data")
+    format: FigureFormat = Field(description="Figure format (png or svg)")
 
 
 class ScriptExecution(BaseModel):
@@ -64,7 +75,7 @@ class ExecutionResult(BaseModel):
         default_factory=dict,
         description="Current MATLAB workspace variables"
     )
-    figures: List[bytes] = Field(
+    figures: List[FigureData] = Field(
         default_factory=list,
-        description="Generated plot images in PNG format"
+        description="Generated plot images in PNG and SVG formats"
     )
