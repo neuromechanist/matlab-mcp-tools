@@ -65,11 +65,13 @@ class MatlabServer:
             }
         )
         
+        self.engine = MatlabEngine()
+        self._initialized = False
+        
         # Set up core MCP protocol handlers
         self.mcp._mcp_server.list_tools()(self._list_tools)
         self.mcp._mcp_server.list_resources()(self._list_resources)
         self.mcp._mcp_server.list_resource_templates()(self._list_resource_templates)
-        self.engine = MatlabEngine()
         # Use .mcp directory in home for all files
         self.mcp_dir = Path.home() / ".mcp"
         self.scripts_dir = self.mcp_dir / "matlab" / "scripts"
@@ -79,8 +81,19 @@ class MatlabServer:
         self._setup_tools()
         self._setup_resources()
     
+    async def initialize(self) -> None:
+        """Initialize server and engine if not already initialized."""
+        if not self._initialized:
+            try:
+                await self.engine.initialize()
+                self._initialized = True
+            except Exception as e:
+                logging.error(f"Failed to initialize MATLAB engine: {str(e)}")
+                raise
+
     async def _list_tools(self) -> ServerResult:
-        """Handle ListToolsRequest."""
+        """Handle ListToolsRequest with proper initialization."""
+        await self.initialize()
         tools = [
             Tool(
                 name="execute_script",
@@ -148,11 +161,13 @@ class MatlabServer:
         return ServerResult(ListToolsResult(tools=tools))
 
     async def _list_resources(self) -> ServerResult:
-        """Handle ListResourcesRequest."""
+        """Handle ListResourcesRequest with proper initialization."""
+        await self.initialize()
         return ServerResult(ListResourcesResult(resources=[]))  # We don't have static resources
 
     async def _list_resource_templates(self) -> ServerResult:
-        """Handle ListResourceTemplatesRequest."""
+        """Handle ListResourceTemplatesRequest with proper initialization."""
+        await self.initialize()
         templates = [
             ResourceTemplate(
                 uriTemplate="matlab://scripts/{script_name}",

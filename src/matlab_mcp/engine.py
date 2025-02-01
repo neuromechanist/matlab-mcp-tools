@@ -174,46 +174,64 @@ class MatlabEngine:
                 figures=[]
             )
 
+    async def cleanup_figures(self) -> None:
+        """Clean up MATLAB figures and temporary files."""
+        if self.eng is not None:
+            try:
+                # Close all figures
+                self.eng.eval('close all', nargout=0)
+                # Clear temporary files
+                for ext in ['png', 'svg']:
+                    for file in self.output_dir.glob(f'figure_*.{ext}'):
+                        try:
+                            file.unlink()
+                        except Exception as e:
+                            print(f"Error cleaning up {file}: {e}", file=sys.stderr)
+            except Exception as e:
+                print(f"Error during figure cleanup: {e}", file=sys.stderr)
+
     async def _capture_figures(self) -> List[FigureData]:
-        """Capture current MATLAB figures in both PNG and SVG formats.
+        """Capture current MATLAB figures in both PNG and SVG formats with proper cleanup.
         
         Returns:
             List of FigureData containing both PNG and SVG versions of each figure
         """
-        figures = []
-        fig_handles = self.eng.eval('get(groot, "Children")', nargout=1)
-        
-        if fig_handles:
-            for i, _ in enumerate(fig_handles):
-                figure_data = []
-                
-                # Save as PNG
-                png_file = self.output_dir / f"figure_{i}.png"
-                self.eng.eval(f"saveas(figure({i+1}), '{png_file}')", nargout=0)
-                with open(png_file, 'rb') as f:
-                    figure_data.append(FigureData(
-                        data=f.read(),
-                        format=FigureFormat.PNG
-                    ))
-                png_file.unlink()
-                
-                # Save as SVG
-                svg_file = self.output_dir / f"figure_{i}.svg"
-                self.eng.eval(
-                    f"set(figure({i+1}), 'Renderer', 'painters'); "
-                    f"saveas(figure({i+1}), '{svg_file}', 'svg')",
-                    nargout=0
-                )
-                with open(svg_file, 'rb') as f:
-                    figure_data.append(FigureData(
-                        data=f.read(),
-                        format=FigureFormat.SVG
-                    ))
-                svg_file.unlink()
-                
-                figures.extend(figure_data)
-                
-        return figures
+        try:
+            figures = []
+            fig_handles = self.eng.eval('get(groot, "Children")', nargout=1)
+            
+            if fig_handles:
+                for i, _ in enumerate(fig_handles):
+                    figure_data = []
+                    
+                    # Save as PNG
+                    png_file = self.output_dir / f"figure_{i}.png"
+                    self.eng.eval(f"saveas(figure({i+1}), '{png_file}')", nargout=0)
+                    with open(png_file, 'rb') as f:
+                        figure_data.append(FigureData(
+                            data=f.read(),
+                            format=FigureFormat.PNG
+                        ))
+                    
+                    # Save as SVG
+                    svg_file = self.output_dir / f"figure_{i}.svg"
+                    self.eng.eval(
+                        f"set(figure({i+1}), 'Renderer', 'painters'); "
+                        f"saveas(figure({i+1}), '{svg_file}', 'svg')",
+                        nargout=0
+                    )
+                    with open(svg_file, 'rb') as f:
+                        figure_data.append(FigureData(
+                            data=f.read(),
+                            format=FigureFormat.SVG
+                        ))
+                    
+                    figures.extend(figure_data)
+                    
+            return figures
+        finally:
+            # Always clean up, even if an error occurred
+            await self.cleanup_figures()
 
     async def get_workspace(self) -> Dict[str, Any]:
         """Get current MATLAB workspace variables.
@@ -295,5 +313,12 @@ class MatlabEngine:
     def close(self) -> None:
         """Clean up MATLAB engine and resources."""
         if self.eng is not None:
-            self.eng.quit()
-            self.eng = None
+            try:
+                # Clean up figures first
+                self.eng.eval('close all', nargout=0)
+                # Then quit the engine
+                self.eng.quit()
+            except Exception as e:
+                print(f"Error during engine cleanup: {e}", file=sys.stderr)
+            finally:
+                self.eng = None

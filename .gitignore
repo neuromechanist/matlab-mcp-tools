@@ -45,6 +45,7 @@ octave-workspace
 # Project specific
 matlab_output/
 test_output/
+*.code-workspace
 
 # Jupyter
 .ipynb_checkpoints/
