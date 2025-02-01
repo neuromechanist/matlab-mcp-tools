@@ -148,6 +148,8 @@ class MatlabEngine:
             else:
                 if ctx:
                     ctx.info("Executing MATLAB command")
+                    print(f"Executing MATLAB command: {script}", file=sys.stderr)
+                # Don't pass stdout/stderr to eval since we're not in a terminal
                 output = self.eng.eval(script, nargout=0)
 
             # Capture figures if requested
@@ -163,13 +165,26 @@ class MatlabEngine:
                 workspace=workspace,
                 figures=figures
             )
-            
-        except Exception as e:
+                
+        except matlab.engine.MatlabExecutionError as e:
+            error_msg = f"MATLAB Error: {str(e)}"
+            print(error_msg, file=sys.stderr)
             if ctx:
-                ctx.error(f"MATLAB execution error: {str(e)}")
+                ctx.error(error_msg)
             return ExecutionResult(
                 output="",
-                error=str(e),
+                error=error_msg,
+                workspace={},
+                figures=[]
+            )
+        except Exception as e:
+            error_msg = f"Python Error: {str(e)}"
+            print(error_msg, file=sys.stderr)
+            if ctx:
+                ctx.error(error_msg)
+            return ExecutionResult(
+                output="",
+                error=error_msg,
                 workspace={},
                 figures=[]
             )
