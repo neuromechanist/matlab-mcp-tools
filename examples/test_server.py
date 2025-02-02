@@ -40,8 +40,8 @@ async def test_basic_execution():
     output_dir.mkdir(exist_ok=True)
     
     for i, fig_data in enumerate(result.figures):
-        output_path = output_dir / f"figure_{i}.png"
-        output_path.write_bytes(fig_data)
+        output_path = output_dir / f"figure_{i}.{fig_data.format}"
+        output_path.write_bytes(fig_data.data)
         print(f"Saved figure to: {output_path}")
     
     # Clean up

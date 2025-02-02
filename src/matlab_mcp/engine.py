@@ -1,5 +1,6 @@
 """MATLAB engine wrapper for MCP Tool."""
 
+import asyncio
 import os
 from pathlib import Path
 import subprocess
@@ -25,6 +26,23 @@ class MatlabEngine:
         self.output_dir.mkdir(exist_ok=True)
         self.matlab_path = os.getenv('MATLAB_PATH', '/Applications/MATLAB_R2024b.app')
         
+    async def wait_for_engine(self) -> None:
+        """Wait for MATLAB engine to be ready."""
+        max_retries = 30
+        retry_delay = 1.0  # seconds
+        
+        for _ in range(max_retries):
+            if self.eng is not None:
+                try:
+                    # Test if engine is responsive
+                    self.eng.eval('1;', nargout=0)
+                    return
+                except Exception:
+                    pass
+            await asyncio.sleep(retry_delay)
+        
+        raise RuntimeError("Timeout waiting for MATLAB engine to be ready")
+
     async def initialize(self) -> None:
         """Initialize MATLAB engine if not already running."""
         if self.eng is not None:
@@ -156,7 +174,7 @@ class MatlabEngine:
         else:
             raise RuntimeError("MATLAB engine is still None after initialization")
 
-    async def execute(
+    def _execute_sync(
         self,
         script: str,
         is_file: bool = False,
@@ -164,20 +182,7 @@ class MatlabEngine:
         capture_plots: bool = True,
         ctx: Optional[Context] = None
     ) -> ExecutionResult:
-        """Execute a MATLAB script or command.
-        
-        Args:
-            script: MATLAB code or file path
-            is_file: Whether script is a file path
-            workspace_vars: Variables to inject into workspace
-            capture_plots: Whether to capture generated plots
-            ctx: MCP context for progress reporting
-        
-        Returns:
-            ExecutionResult containing output, workspace state, and figures
-        """
-        await self.initialize()
-        
+        """Synchronous execution of MATLAB commands."""
         try:
             # Clear existing figures if capturing plots
             if capture_plots:
@@ -196,35 +201,121 @@ class MatlabEngine:
                     else:
                         self.eng.workspace[name] = value
 
-            # Execute script
-            if is_file:
-                script_path = Path(script)
-                if not script_path.exists():
-                    raise FileNotFoundError(f"Script not found: {script}")
-                if ctx:
-                    ctx.info(f"Executing MATLAB script: {script_path}")
-                output = self.eng.run(str(script_path), nargout=0)
-            else:
-                if ctx:
-                    ctx.info("Executing MATLAB command")
-                    print(f"Executing MATLAB command: {script}", file=sys.stderr)
-                # Don't pass stdout/stderr to eval since we're not in a terminal
-                output = self.eng.eval(script, nargout=0)
-
-            # Capture figures if requested
-            figures = []
-            if capture_plots:
-                figures = await self._capture_figures()
+            # Execute script and capture output
+            diary_file = self.output_dir / "matlab_output.txt"
+            output = ""
             
-            # Get workspace state
-            workspace = await self.get_workspace()
+            try:
+                # Set up diary to capture output
+                self.eng.eval(f"diary('{diary_file}')", nargout=0)
+                self.eng.eval("diary on", nargout=0)
+                
+                # Execute script
+                if is_file:
+                    script_path = Path(script)
+                    if not script_path.exists():
+                        raise FileNotFoundError(f"Script not found: {script}")
+                    if ctx:
+                        ctx.info(f"Executing MATLAB script: {script_path}")
+                    self.eng.run(str(script_path), nargout=0)
+                else:
+                    if ctx:
+                        ctx.info("Executing MATLAB command")
+                        print(f"Executing MATLAB command: {script}", file=sys.stderr)
+                    self.eng.eval(script, nargout=0)
+            finally:
+                # Turn off diary and read the output
+                try:
+                    self.eng.eval("diary off", nargout=0)
+                    if diary_file.exists():
+                        output = diary_file.read_text()
+                        diary_file.unlink()  # Clean up
+                except Exception as e:
+                    print(f"Error reading diary: {e}", file=sys.stderr)
+
+            # Get workspace state synchronously
+            workspace = {}
+            var_names = self.eng.eval('who', nargout=1)
+            for var in var_names:
+                try:
+                    value = self.eng.workspace[var]
+                    if isinstance(value, matlab.double):
+                        try:
+                            size = value.size
+                            if len(size) == 2 and (size[0] == 1 or size[1] == 1):
+                                workspace[var] = value._data.tolist()
+                            else:
+                                workspace[var] = [row.tolist() for row in value]
+                        except Exception:
+                            workspace[var] = str(value)
+                    else:
+                        try:
+                            workspace[var] = value._data.tolist()
+                        except Exception:
+                            workspace[var] = str(value)
+                except Exception as e:
+                    workspace[var] = f"<Error reading variable: {str(e)}>"
 
             return ExecutionResult(
                 output=str(output) if output else "",
                 workspace=workspace,
-                figures=figures
+                figures=[]  # Figures will be captured separately
             )
-                
+        except Exception as e:
+            error_msg = f"Error in synchronous execution: {str(e)}"
+            print(error_msg, file=sys.stderr)
+            if ctx:
+                ctx.error(error_msg)
+            return ExecutionResult(
+                output="",
+                error=error_msg,
+                workspace={},
+                figures=[]
+            )
+
+    async def execute(
+        self,
+        script: str,
+        is_file: bool = False,
+        workspace_vars: Optional[Dict[str, Any]] = None,
+        capture_plots: bool = True,
+        ctx: Optional[Context] = None
+    ) -> ExecutionResult:
+        """Execute a MATLAB script or command asynchronously.
+        
+        Args:
+            script: MATLAB code or file path
+            is_file: Whether script is a file path
+            workspace_vars: Variables to inject into workspace
+            capture_plots: Whether to capture generated plots
+            ctx: MCP context for progress reporting
+        
+        Returns:
+            ExecutionResult containing output, workspace state, and figures
+        """
+        await self.initialize()
+        await self.wait_for_engine()
+        
+        try:
+            # Run synchronous MATLAB operations in executor
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                self._execute_sync,
+                script,
+                is_file,
+                workspace_vars,
+                capture_plots,
+                ctx
+            )
+            
+            # Capture figures if requested (this is already async)
+            if capture_plots:
+                figures = await self._capture_figures()
+                result.figures = figures
+            
+            return result
+            
         except matlab.engine.MatlabExecutionError as e:
             error_msg = f"MATLAB Error: {str(e)}"
             print(error_msg, file=sys.stderr)

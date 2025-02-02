@@ -51,6 +51,7 @@ class MatlabServer:
     """MCP server providing MATLAB integration."""
     
     _instance = None
+    _initialization_lock = None  # Will be set in __init__
     
     @classmethod
     def get_instance(cls):
@@ -66,6 +67,9 @@ class MatlabServer:
             
         self.engine = MatlabEngine()
         self._initialized = False
+        # Create lock in __init__ since it needs event loop
+        if MatlabServer._initialization_lock is None:
+            MatlabServer._initialization_lock = asyncio.Lock()
         
         # Use .mcp directory in home for all files
         self.mcp_dir = Path.home() / ".mcp"
@@ -75,13 +79,15 @@ class MatlabServer:
     
     async def initialize(self) -> None:
         """Initialize server and engine if not already initialized."""
-        if not self._initialized:
-            try:
-                await self.engine.initialize()
-                self._initialized = True
-            except Exception as e:
-                logging.error(f"Failed to initialize MATLAB engine: {str(e)}")
-                raise
+        async with MatlabServer._initialization_lock:
+            if not self._initialized:
+                try:
+                    await self.engine.initialize()
+                    await self.engine.wait_for_engine()
+                    self._initialized = True
+                except Exception as e:
+                    logging.error(f"Failed to initialize MATLAB engine: {str(e)}")
+                    raise
     
     def close(self):
         """Clean up server resources."""

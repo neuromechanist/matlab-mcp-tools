@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+from pathlib import Path
 from matlab_mcp.server import MatlabServer
 
 
@@ -29,13 +30,18 @@ async def test_emg():
         )
         print(f"Simulation complete. Result: {result}")
         
-        # Verify figures were captured
+        # Save captured figures
+        output_dir = Path("test_output")
+        output_dir.mkdir(exist_ok=True)
+        
         print(f"Number of figures captured: {len(result.figures)}")
         if len(result.figures) > 0:
             print("EMG simulation and plotting successful!")
-            print("Figure paths:")
-            for fig in result.figures:
-                print(f"- {fig}")
+            print("Saving figures...")
+            for i, fig_data in enumerate(result.figures):
+                output_path = output_dir / f"emg_figure_{i}.{fig_data.format}"
+                output_path.write_bytes(fig_data.data)
+                print(f"Saved figure to: {output_path}")
         else:
             print("No figures were captured")
             
