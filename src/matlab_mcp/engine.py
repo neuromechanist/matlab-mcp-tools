@@ -14,7 +14,7 @@ from .utils.section_parser import extract_section
 
 class MatlabEngine:
     """Wrapper for MATLAB engine with enhanced functionality."""
-    
+
     def __init__(self):
         """Initialize MATLAB engine wrapper."""
         self.eng = None
@@ -24,12 +24,12 @@ class MatlabEngine:
         self.output_dir.parent.mkdir(parents=True, exist_ok=True)
         self.output_dir.mkdir(exist_ok=True)
         self.matlab_path = os.getenv('MATLAB_PATH', '/Applications/MATLAB_R2024b.app')
-        
+
     async def initialize(self) -> None:
         """Initialize MATLAB engine if not already running."""
         if self.eng is not None:
             return
-            
+
         try:
             print("\n=== MATLAB Engine Initialization ===", file=sys.stderr)
             print(f"MATLAB_PATH: {self.matlab_path}", file=sys.stderr)
@@ -37,14 +37,14 @@ class MatlabEngine:
             print(f"matlab.engine path: {matlab.engine.__file__}", file=sys.stderr)
             print(f"Current working directory: {os.getcwd()}", file=sys.stderr)
             print(f"PYTHONPATH: {os.getenv('PYTHONPATH', 'Not set')}", file=sys.stderr)
-            
+
             # Verify MATLAB installation
             if not os.path.exists(self.matlab_path):
                 raise RuntimeError(
                     f"MATLAB installation not found at {self.matlab_path}. "
                     "Please verify MATLAB_PATH environment variable."
                 )
-            
+
             # Try to find all available MATLAB sessions
             try:
                 sessions = matlab.engine.find_matlab()
@@ -52,7 +52,7 @@ class MatlabEngine:
             except Exception as e:
                 print(f"Error finding MATLAB sessions: {e}", file=sys.stderr)
                 sessions = []
-            
+
             # Try to connect to existing session or start new one
             try:
                 if sessions:
@@ -61,22 +61,22 @@ class MatlabEngine:
                 else:
                     print("\nNo existing sessions found, starting new MATLAB session...", file=sys.stderr)
                     self.eng = matlab.engine.start_matlab()
-                
+
                 if self.eng is None:
                     raise RuntimeError("MATLAB engine failed to start (returned None)")
-                
+
                 # Test basic MATLAB functionality
                 ver = self.eng.version()
                 print(f"Connected to MATLAB version: {ver}", file=sys.stderr)
-                
+
                 # Add current directory to MATLAB path
                 cwd = str(Path.cwd())
                 print(f"Adding current directory to MATLAB path: {cwd}", file=sys.stderr)
                 self.eng.addpath(cwd, nargout=0)
-                
+
                 print("MATLAB engine initialized successfully", file=sys.stderr)
                 return
-                
+
             except Exception as e:
                 print(f"Error starting MATLAB engine: {e}", file=sys.stderr)
                 # Try to install MATLAB engine if not found
@@ -86,7 +86,7 @@ class MatlabEngine:
                         f"MATLAB Python engine setup not found at {engine_setup}. "
                         "Please verify your MATLAB installation."
                     )
-                
+
                 print(f"Attempting to install MATLAB engine from {engine_setup}...", file=sys.stderr)
                 try:
                     result = subprocess.run(
@@ -97,12 +97,12 @@ class MatlabEngine:
                     )
                     print("MATLAB engine installed successfully.", file=sys.stderr)
                     print(result.stdout, file=sys.stderr)
-                    
+
                     # Try starting engine again after installation
                     self.eng = matlab.engine.start_matlab()
                     if self.eng is None:
                         raise RuntimeError("MATLAB engine failed to start after installation")
-                        
+
                     ver = self.eng.version()
                     print(f"Connected to MATLAB version: {ver}", file=sys.stderr)
                     print("MATLAB engine initialized successfully after installation", file=sys.stderr)
@@ -121,14 +121,14 @@ class MatlabEngine:
                     f"MATLAB installation not found at {self.matlab_path}. "
                     "Please set MATLAB_PATH environment variable."
                 )
-            
+
             engine_setup = Path(self.matlab_path) / "extern/engines/python/setup.py"
             if not engine_setup.exists():
                 raise RuntimeError(
                     f"MATLAB Python engine setup not found at {engine_setup}. "
                     "Please verify your MATLAB installation."
                 )
-            
+
             print(f"Installing MATLAB engine from {engine_setup}...", file=sys.stderr)
             try:
                 subprocess.run(
@@ -146,10 +146,10 @@ class MatlabEngine:
                     f"Failed to install MATLAB engine: {e.stderr}\n"
                     "Please try installing manually."
                 )
-        
+
         # Create output directory
         self.output_dir.mkdir(exist_ok=True)
-        
+
         # Add current directory to MATLAB path
         if self.eng is not None:
             self.eng.addpath(str(Path.cwd()))
@@ -165,24 +165,24 @@ class MatlabEngine:
         ctx: Optional[Context] = None
     ) -> ExecutionResult:
         """Execute a MATLAB script or command.
-        
+
         Args:
             script: MATLAB code or file path
             is_file: Whether script is a file path
             workspace_vars: Variables to inject into workspace
             capture_plots: Whether to capture generated plots
             ctx: MCP context for progress reporting
-        
+
         Returns:
             ExecutionResult containing output, workspace state, and figures
         """
         await self.initialize()
-        
+
         try:
             # Clear existing figures if capturing plots
             if capture_plots:
                 self.eng.close('all', nargout=0)
-            
+
             # Set workspace variables
             if workspace_vars:
                 for name, value in workspace_vars.items():
@@ -215,7 +215,7 @@ class MatlabEngine:
             figures = []
             if capture_plots:
                 figures = await self._capture_figures()
-            
+
             # Get workspace state
             workspace = await self.get_workspace()
 
@@ -224,7 +224,7 @@ class MatlabEngine:
                 workspace=workspace,
                 figures=figures
             )
-                
+
         except matlab.engine.MatlabExecutionError as e:
             error_msg = f"MATLAB Error: {str(e)}"
             print(error_msg, file=sys.stderr)
@@ -266,18 +266,18 @@ class MatlabEngine:
 
     async def _capture_figures(self) -> List[FigureData]:
         """Capture current MATLAB figures in both PNG and SVG formats with proper cleanup.
-        
+
         Returns:
             List of FigureData containing both PNG and SVG versions of each figure
         """
         try:
             figures = []
             fig_handles = self.eng.eval('get(groot, "Children")', nargout=1)
-            
+
             if fig_handles:
                 for i, _ in enumerate(fig_handles):
                     figure_data = []
-                    
+
                     # Save as PNG
                     png_file = self.output_dir / f"figure_{i}.png"
                     self.eng.eval(f"saveas(figure({i+1}), '{png_file}')", nargout=0)
@@ -286,7 +286,7 @@ class MatlabEngine:
                             data=f.read(),
                             format=FigureFormat.PNG
                         ))
-                    
+
                     # Save as SVG
                     svg_file = self.output_dir / f"figure_{i}.svg"
                     self.eng.eval(
@@ -299,9 +299,9 @@ class MatlabEngine:
                             data=f.read(),
                             format=FigureFormat.SVG
                         ))
-                    
+
                     figures.extend(figure_data)
-                    
+
             return figures
         finally:
             # Always clean up, even if an error occurred
@@ -309,13 +309,13 @@ class MatlabEngine:
 
     async def get_workspace(self) -> Dict[str, Any]:
         """Get current MATLAB workspace variables.
-        
+
         Returns:
             Dictionary of variable names and their values
         """
         workspace = {}
         var_names = self.eng.eval('who', nargout=1)
-        
+
         for var in var_names:
             try:
                 value = self.eng.workspace[var]
@@ -338,7 +338,7 @@ class MatlabEngine:
                         workspace[var] = str(value)
             except Exception as e:
                 workspace[var] = f"<Error reading variable: {str(e)}>"
-                
+
         return workspace
 
     async def execute_section(
@@ -350,21 +350,21 @@ class MatlabEngine:
         ctx: Optional[Context] = None
     ) -> ExecutionResult:
         """Execute a specific section of a MATLAB script.
-        
+
         Args:
             file_path: Path to the MATLAB script
             section_range: Tuple of (start_line, end_line) for the section
             maintain_workspace: Whether to maintain workspace between sections
             capture_plots: Whether to capture generated plots
             ctx: MCP context for progress reporting
-            
+
         Returns:
             ExecutionResult containing output, workspace state, and figures
         """
         script_path = Path(file_path)
         if not script_path.exists():
             raise FileNotFoundError(f"Script not found: {file_path}")
-            
+
         # Extract the section code
         section_code = extract_section(
             script_path,
@@ -372,10 +372,10 @@ class MatlabEngine:
             section_range[1],
             maintain_workspace
         )
-        
+
         if ctx:
             ctx.info(f"Executing section (lines {section_range[0]}-{section_range[1]})")
-            
+
         # Execute the section
         return await self.execute(
             section_code,

@@ -4,7 +4,6 @@ import asyncio
 import logging
 import os
 import signal
-import time
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
 from pydantic import Field
@@ -52,29 +51,30 @@ else:
 _instance = None
 _instance_lock = asyncio.Lock()
 
+
 class MatlabServer:
     """MCP server providing MATLAB integration."""
-    
+
     _instance = None
-    
+
     @classmethod
     def get_instance(cls):
         """Get singleton instance of MatlabServer."""
         if cls._instance is None:
             cls._instance = cls()
         return cls._instance
-    
+
     def __init__(self):
         """Initialize the MATLAB MCP server."""
         self.engine = MatlabEngine()
         self._initialized = False
-        
+
         # Use .mcp directory in home for all files
         self.mcp_dir = Path.home() / ".mcp"
         self.scripts_dir = self.mcp_dir / "matlab" / "scripts"
         self.scripts_dir.parent.mkdir(parents=True, exist_ok=True)
         self.scripts_dir.mkdir(exist_ok=True)
-    
+
     @classmethod
     async def get_instance(cls):
         """Get singleton instance of MatlabServer."""
@@ -93,7 +93,7 @@ class MatlabServer:
             except Exception as e:
                 logging.error(f"Failed to initialize MATLAB engine: {str(e)}")
                 raise
-    
+
     def close(self):
         """Clean up server resources."""
         print("\nShutting down MATLAB MCP Server...")
@@ -103,7 +103,10 @@ class MatlabServer:
                 self.engine = None
             self._initialized = False
             _instance = None
-    
+        except Exception as e:
+            logging.error(f"Error during shutdown: {str(e)}")
+            raise
+
     def close(self) -> None:
         """Clean up server resources on process exit."""
         if self.engine is not None:
@@ -130,7 +133,7 @@ async def execute_script(
     ctx: Optional[Context] = None
 ) -> Dict[str, Any]:
     """Execute MATLAB code and return results with plots.
-    
+
     Returns a dictionary containing:
     - output: Command output text
     - error: Error message if any
@@ -139,10 +142,10 @@ async def execute_script(
     """
     server = MatlabServer.get_instance()
     await server.initialize()
-    
+
     if ctx:
         ctx.info(f"Executing MATLAB {'file' if is_file else 'code'}")
-        
+
     result = await server.engine.execute(
         script,
         is_file=is_file,
@@ -150,13 +153,13 @@ async def execute_script(
         capture_plots=capture_plots,
         ctx=ctx
     )
-    
+
     # Convert FigureData to MCP Image objects
     figures = [
         Image(data=fig.data, format=fig.format.value)
         for fig in result.figures
     ]
-    
+
     return {
         "output": result.output,
         "error": result.error,
@@ -182,7 +185,7 @@ async def execute_section(
     ctx: Optional[Context] = None
 ) -> Dict[str, Any]:
     """Execute a specific section of a MATLAB script.
-    
+
     Returns a dictionary containing:
     - output: Section execution output
     - error: Error message if any
@@ -191,14 +194,14 @@ async def execute_section(
     """
     server = MatlabServer.get_instance()
     await server.initialize()
-    
+
     script_path = server.scripts_dir / f"{script_name}.m"
     if not script_path.exists():
         raise FileNotFoundError(f"Script {script_name}.m not found")
-        
+
     if ctx:
         ctx.info(f"Executing section (lines {section_range[0]}-{section_range[1]})")
-        
+
     result = await server.engine.execute_section(
         str(script_path),
         section_range,
@@ -206,13 +209,13 @@ async def execute_section(
         capture_plots=capture_plots,
         ctx=ctx
     )
-    
+
     # Convert FigureData to MCP Image objects
     figures = [
         Image(data=fig.data, format=fig.format.value)
         for fig in result.figures
     ]
-    
+
     return {
         "output": result.output,
         "error": result.error,
@@ -226,16 +229,16 @@ async def get_workspace(
     ctx: Optional[Context] = None
 ) -> Dict[str, Any]:
     """Get current MATLAB workspace variables.
-    
+
     Returns a dictionary mapping variable names to their values.
     Complex MATLAB types are converted to Python types where possible.
     """
     server = MatlabServer.get_instance()
     await server.initialize()
-    
+
     if ctx:
         ctx.info("Fetching MATLAB workspace")
-        
+
     return await server.engine.get_workspace()
 
 
@@ -245,7 +248,7 @@ async def get_script_sections(
     ctx: Optional[Context] = None
 ) -> List[Dict[str, Any]]:
     """Get information about sections in a MATLAB script.
-    
+
     Returns a list of dictionaries containing:
     - start_line: Section start line number
     - end_line: Section end line number
@@ -253,14 +256,14 @@ async def get_script_sections(
     """
     server = MatlabServer.get_instance()
     await server.initialize()
-    
+
     script_path = server.scripts_dir / f"{script_name}.m"
     if not script_path.exists():
         raise FileNotFoundError(f"Script {script_name}.m not found")
-        
+
     if ctx:
         ctx.info(f"Getting sections for script: {script_name}")
-        
+
     return get_section_info(script_path)
 
 
@@ -271,21 +274,21 @@ async def create_matlab_script(
     ctx: Optional[Context] = None
 ) -> str:
     """Create a new MATLAB script file.
-    
+
     Returns the path to the created script file.
     """
     server = MatlabServer.get_instance()
     await server.initialize()
-    
+
     if not script_name.isidentifier():
         raise ValueError("Script name must be a valid MATLAB identifier")
-    
+
     script_path = server.scripts_dir / f"{script_name}.m"
     script_path.write_text(code)
-    
+
     if ctx:
         ctx.info(f"Created MATLAB script: {script_path}")
-    
+
     return str(script_path)
 
 
@@ -295,40 +298,40 @@ async def get_script_content(script_name: str) -> str:
     """Get the content of a MATLAB script."""
     server = MatlabServer.get_instance()
     await server.initialize()
-    
+
     script_path = server.scripts_dir / f"{script_name}.m"
     if not script_path.exists():
         raise FileNotFoundError(f"Script {script_name}.m not found")
-    
+
     return script_path.read_text()
 
 
 def run_server():
     """Run the MCP server."""
     server = MatlabServer.get_instance()
-    
+
     def signal_handler(signum, frame):
         print("\nReceived signal to shutdown...")
         server.close()
-        
+
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
-    
+
     print("MATLAB MCP Server is starting...")
-    
+
     try:
         # Initialize server first
         asyncio.run(server.initialize())
         print("MATLAB engine initialized successfully")
-        
+
         # Configure MCP logging to suppress request processing messages
         mcp_logger = logging.getLogger('mcp')
         mcp_logger.setLevel(logging.WARNING)
-        
+
         print("Server is running and ready to accept connections")
         print("Use the tools with Cline or other MCP-compatible clients")
         print("Press Ctrl+C to shutdown gracefully")
-        
+
         # Run the MCP server with stdio transport
         mcp.run(transport='stdio')
     except KeyboardInterrupt:
