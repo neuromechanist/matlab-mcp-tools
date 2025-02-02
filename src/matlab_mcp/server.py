@@ -55,13 +55,19 @@ _instance_lock = asyncio.Lock()
 class MatlabServer:
     """MCP server providing MATLAB integration."""
     
+    _instance = None
+    
+    @classmethod
+    def get_instance(cls):
+        """Get singleton instance of MatlabServer."""
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+    
     def __init__(self):
         """Initialize the MATLAB MCP server."""
         self.engine = MatlabEngine()
         self._initialized = False
-        self._last_activity = time.time()
-        self._timeout_task = None
-        self._timeout_seconds = 3600  # 1 hour timeout by default
         
         # Use .mcp directory in home for all files
         self.mcp_dir = Path.home() / ".mcp"
@@ -80,45 +86,18 @@ class MatlabServer:
 
     async def initialize(self) -> None:
         """Initialize server and engine if not already initialized."""
-        async with _instance_lock:
-            if not self._initialized:
-                try:
-                    await self.engine.initialize()
-                    await self.engine.wait_for_engine()
-                    self._initialized = True
-                    self._start_timeout_monitor()
-                except Exception as e:
-                    logging.error(f"Failed to initialize MATLAB engine: {str(e)}")
-                    raise
-
-    def _start_timeout_monitor(self):
-        """Start monitoring for timeout."""
-        async def timeout_monitor():
-            while True:
-                await asyncio.sleep(60)  # Check every minute
-                if time.time() - self._last_activity > self._timeout_seconds:
-                    await self.timeout_shutdown()
-                    break
-
-        if self._timeout_task is None:
-            self._timeout_task = asyncio.create_task(timeout_monitor())
-
-    def update_activity(self):
-        """Update last activity timestamp."""
-        self._last_activity = time.time()
-
-    async def timeout_shutdown(self):
-        """Shutdown due to timeout."""
-        logging.info("MATLAB engine shutting down due to inactivity")
-        await self.force_shutdown()
-
-    async def force_shutdown(self):
-        """Force shutdown of MATLAB engine."""
-        global _instance
-        async with _instance_lock:
-            if self._timeout_task:
-                self._timeout_task.cancel()
-                self._timeout_task = None
+        if not self._initialized:
+            try:
+                await self.engine.initialize()
+                self._initialized = True
+            except Exception as e:
+                logging.error(f"Failed to initialize MATLAB engine: {str(e)}")
+                raise
+    
+    def close(self):
+        """Clean up server resources."""
+        print("\nShutting down MATLAB MCP Server...")
+        try:
             if self.engine is not None:
                 self.engine.close()
                 self.engine = None
