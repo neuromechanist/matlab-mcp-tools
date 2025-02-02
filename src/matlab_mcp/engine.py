@@ -23,7 +23,7 @@ class MatlabEngine:
         self.output_dir = self.mcp_dir / "matlab" / "output"
         self.output_dir.parent.mkdir(parents=True, exist_ok=True)
         self.output_dir.mkdir(exist_ok=True)
-        self.matlab_path = os.getenv('MATLAB_PATH', '/Applications/MATLAB_R2024a.app')
+        self.matlab_path = os.getenv('MATLAB_PATH', '/Applications/MATLAB_R2024b.app')
         
     async def initialize(self) -> None:
         """Initialize MATLAB engine if not already running."""
@@ -31,29 +31,88 @@ class MatlabEngine:
             return
             
         try:
-            print("Starting MATLAB engine...", file=sys.stderr)
+            print("\n=== MATLAB Engine Initialization ===", file=sys.stderr)
             print(f"MATLAB_PATH: {self.matlab_path}", file=sys.stderr)
             print(f"Python executable: {sys.executable}", file=sys.stderr)
             print(f"matlab.engine path: {matlab.engine.__file__}", file=sys.stderr)
+            print(f"Current working directory: {os.getcwd()}", file=sys.stderr)
+            print(f"PYTHONPATH: {os.getenv('PYTHONPATH', 'Not set')}", file=sys.stderr)
+            
+            # Verify MATLAB installation
+            if not os.path.exists(self.matlab_path):
+                raise RuntimeError(
+                    f"MATLAB installation not found at {self.matlab_path}. "
+                    "Please verify MATLAB_PATH environment variable."
+                )
             
             # Try to find all available MATLAB sessions
-            sessions = matlab.engine.find_matlab()
-            print(f"Available MATLAB sessions: {sessions}", file=sys.stderr)
+            try:
+                sessions = matlab.engine.find_matlab()
+                print(f"Available MATLAB sessions: {sessions}", file=sys.stderr)
+            except Exception as e:
+                print(f"Error finding MATLAB sessions: {e}", file=sys.stderr)
+                sessions = []
             
-            if sessions:
-                print("Connecting to existing MATLAB session...", file=sys.stderr)
-                self.eng = matlab.engine.connect_matlab(sessions[0])
-            else:
-                print("Starting new MATLAB session...", file=sys.stderr)
-                self.eng = matlab.engine.start_matlab()
-            
-            if self.eng is None:
-                raise RuntimeError("MATLAB engine failed to start (returned None)")
-            
-            # Test basic MATLAB functionality
-            ver = self.eng.version()
-            print(f"Connected to MATLAB version: {ver}", file=sys.stderr)
-            print("MATLAB engine started successfully", file=sys.stderr)
+            # Try to connect to existing session or start new one
+            try:
+                if sessions:
+                    print("\nFound existing MATLAB sessions, attempting to connect...", file=sys.stderr)
+                    self.eng = matlab.engine.connect_matlab(sessions[0])
+                else:
+                    print("\nNo existing sessions found, starting new MATLAB session...", file=sys.stderr)
+                    self.eng = matlab.engine.start_matlab()
+                
+                if self.eng is None:
+                    raise RuntimeError("MATLAB engine failed to start (returned None)")
+                
+                # Test basic MATLAB functionality
+                ver = self.eng.version()
+                print(f"Connected to MATLAB version: {ver}", file=sys.stderr)
+                
+                # Add current directory to MATLAB path
+                cwd = str(Path.cwd())
+                print(f"Adding current directory to MATLAB path: {cwd}", file=sys.stderr)
+                self.eng.addpath(cwd, nargout=0)
+                
+                print("MATLAB engine initialized successfully", file=sys.stderr)
+                return
+                
+            except Exception as e:
+                print(f"Error starting MATLAB engine: {e}", file=sys.stderr)
+                # Try to install MATLAB engine if not found
+                engine_setup = Path(self.matlab_path) / "extern/engines/python/setup.py"
+                if not engine_setup.exists():
+                    raise RuntimeError(
+                        f"MATLAB Python engine setup not found at {engine_setup}. "
+                        "Please verify your MATLAB installation."
+                    )
+                
+                print(f"Attempting to install MATLAB engine from {engine_setup}...", file=sys.stderr)
+                try:
+                    result = subprocess.run(
+                        [sys.executable, str(engine_setup), "install"],
+                        check=True,
+                        capture_output=True,
+                        text=True
+                    )
+                    print("MATLAB engine installed successfully.", file=sys.stderr)
+                    print(result.stdout, file=sys.stderr)
+                    
+                    # Try starting engine again after installation
+                    self.eng = matlab.engine.start_matlab()
+                    if self.eng is None:
+                        raise RuntimeError("MATLAB engine failed to start after installation")
+                        
+                    ver = self.eng.version()
+                    print(f"Connected to MATLAB version: {ver}", file=sys.stderr)
+                    print("MATLAB engine initialized successfully after installation", file=sys.stderr)
+                except subprocess.CalledProcessError as e:
+                    raise RuntimeError(
+                        f"Failed to install MATLAB engine:\n"
+                        f"stdout: {e.stdout}\n"
+                        f"stderr: {e.stderr}\n"
+                        "Please try installing manually."
+                    )
         except (ImportError, RuntimeError) as e:
             print(f"Error starting MATLAB engine: {str(e)}", file=sys.stderr)
             # Try to install MATLAB engine if not found

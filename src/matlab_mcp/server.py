@@ -1,5 +1,6 @@
 """MATLAB MCP Server implementation."""
 
+import asyncio
 import logging
 import os
 import signal
@@ -15,15 +16,17 @@ from .utils.section_parser import get_section_info
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(message)s'
+    level=logging.DEBUG,
+    format='%(levelname)s: %(message)s',
+    force=True
 )
 
-# Create FastMCP instance at module level
+# Create FastMCP instance at module level with debug enabled for better visibility
 mcp = FastMCP(
     "MATLAB",
     dependencies=["matlabengine"],
-    debug=False
+    debug=True,
+    instructions="MATLAB MCP server providing access to MATLAB engine functionality."
 )
 
 
@@ -269,25 +272,35 @@ async def get_script_content(script_name: str) -> str:
 
 def run_server():
     """Run the MCP server."""
+    server = MatlabServer.get_instance()
+    
     def signal_handler(signum, frame):
         print("\nReceived signal to shutdown...")
-        MatlabServer.get_instance().close()
+        server.close()
         
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
-    print("MATLAB MCP Server is running...")
-    print("Use the tools with Cline or other MCP-compatible clients.")
-    print("Press Ctrl+C to shutdown gracefully")
+    print("MATLAB MCP Server is starting...")
     
     try:
+        # Initialize server first
+        asyncio.run(server.initialize())
+        print("MATLAB engine initialized successfully")
+        
+        print("Server is running and ready to accept connections")
+        print("Use the tools with Cline or other MCP-compatible clients")
+        print("Press Ctrl+C to shutdown gracefully")
+        
+        # Run the MCP server with stdio transport
         mcp.run(transport='stdio')
     except KeyboardInterrupt:
         print("\nReceived keyboard interrupt...")
-        MatlabServer.get_instance().close()
+        server.close()
     except Exception as e:
         print(f"\nError: {str(e)}")
-        MatlabServer.get_instance().close()
+        server.close()
+        raise  # Re-raise to show full error trace
 
 
 def main():

@@ -10,22 +10,37 @@ from matlab_mcp.models import FigureFormat
 
 async def test_server_initialization():
     """Test server initialization sequence."""
-    print("\nTesting server initialization...")
+    print("\nTesting server initialization with detailed logging...")
+    print("Current MATLAB_PATH:", os.getenv('MATLAB_PATH', 'Not set'))
     
     server = MatlabServer()
     
-    # Test initial state
-    assert not server._initialized
-    assert server.engine.eng is None
-    
-    # Test initialization
-    await server.initialize()
-    assert server._initialized
-    assert server.engine.eng is not None
-    print("Server initialization successful")
-    
-    # Clean up
-    server.close()
+    try:
+        # Test initial state
+        print("Checking initial state...")
+        assert not server._initialized
+        assert server.engine.eng is None
+        print("Initial state verified")
+        
+        # Test initialization
+        print("Attempting server initialization...")
+        await server.initialize()
+        print("Server initialized")
+        
+        assert server._initialized
+        assert server.engine.eng is not None
+        print("Server initialization successful")
+        
+        # Test MATLAB functionality
+        print("Testing MATLAB functionality...")
+        ver = server.engine.eng.version()
+        print(f"Connected to MATLAB version: {ver}")
+    except Exception as e:
+        print(f"Initialization failed: {str(e)}")
+        raise
+    finally:
+        # Clean up
+        server.close()
 
 
 async def test_figure_cleanup():
