@@ -14,20 +14,37 @@ from .engine import MatlabEngine
 from .utils.section_parser import get_section_info
 
 
-# Configure logging
+# Configure logging based on debug mode
+debug_mode = os.getenv('MATLAB_MCP_DEBUG', '').lower() in ('true', '1', 'yes')
+
+# Configure root logger
 logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(levelname)s: %(message)s',
+    level=logging.DEBUG if debug_mode else logging.WARNING,
+    format='%(message)s',
     force=True
 )
 
-# Create FastMCP instance at module level with debug enabled for better visibility
+# Configure MCP loggers to be completely silent unless in debug mode
+for logger_name in ['mcp', 'mcp.server', 'mcp.client', 'mcp.shared']:
+    logger = logging.getLogger(logger_name)
+    if not debug_mode:
+        logger.addHandler(logging.NullHandler())
+    logger.setLevel(logging.DEBUG if debug_mode else logging.CRITICAL)
+    logger.propagate = False
+
+# Create FastMCP instance at module level
 mcp = FastMCP(
     "MATLAB",
     dependencies=["matlabengine"],
-    debug=True,
+    debug=debug_mode,
     instructions="MATLAB MCP server providing access to MATLAB engine functionality."
 )
+
+# Log startup mode
+if debug_mode:
+    logging.debug("Starting in DEBUG mode")
+else:
+    print("MATLAB MCP Server starting (set MATLAB_MCP_DEBUG=true for debug output)")
 
 
 class MatlabServer:
@@ -287,6 +304,10 @@ def run_server():
         # Initialize server first
         asyncio.run(server.initialize())
         print("MATLAB engine initialized successfully")
+        
+        # Configure MCP logging to suppress request processing messages
+        mcp_logger = logging.getLogger('mcp')
+        mcp_logger.setLevel(logging.WARNING)
         
         print("Server is running and ready to accept connections")
         print("Use the tools with Cline or other MCP-compatible clients")
