@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import signal
+import time
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
 from pydantic import Field
@@ -47,29 +48,20 @@ else:
     print("MATLAB MCP Server starting (set MATLAB_MCP_DEBUG=true for debug output)")
 
 
+# Module-level singleton instance and lock
+_instance = None
+_instance_lock = asyncio.Lock()
+
 class MatlabServer:
     """MCP server providing MATLAB integration."""
     
-    _instance = None
-    _initialization_lock = None  # Will be set in __init__
-    
-    @classmethod
-    def get_instance(cls):
-        """Get singleton instance of MatlabServer."""
-        if cls._instance is None:
-            cls._instance = cls()
-        return cls._instance
-    
     def __init__(self):
         """Initialize the MATLAB MCP server."""
-        if MatlabServer._instance is not None:
-            raise RuntimeError("Use get_instance() instead")
-            
         self.engine = MatlabEngine()
         self._initialized = False
-        # Create lock in __init__ since it needs event loop
-        if MatlabServer._initialization_lock is None:
-            MatlabServer._initialization_lock = asyncio.Lock()
+        self._last_activity = time.time()
+        self._timeout_task = None
+        self._timeout_seconds = 3600  # 1 hour timeout by default
         
         # Use .mcp directory in home for all files
         self.mcp_dir = Path.home() / ".mcp"
@@ -77,31 +69,70 @@ class MatlabServer:
         self.scripts_dir.parent.mkdir(parents=True, exist_ok=True)
         self.scripts_dir.mkdir(exist_ok=True)
     
+    @classmethod
+    async def get_instance(cls):
+        """Get singleton instance of MatlabServer."""
+        global _instance
+        async with _instance_lock:
+            if _instance is None:
+                _instance = cls()
+            return _instance
+
     async def initialize(self) -> None:
         """Initialize server and engine if not already initialized."""
-        async with MatlabServer._initialization_lock:
+        async with _instance_lock:
             if not self._initialized:
                 try:
                     await self.engine.initialize()
                     await self.engine.wait_for_engine()
                     self._initialized = True
+                    self._start_timeout_monitor()
                 except Exception as e:
                     logging.error(f"Failed to initialize MATLAB engine: {str(e)}")
                     raise
-    
-    def close(self):
-        """Clean up server resources."""
-        print("\nShutting down MATLAB MCP Server...")
-        try:
+
+    def _start_timeout_monitor(self):
+        """Start monitoring for timeout."""
+        async def timeout_monitor():
+            while True:
+                await asyncio.sleep(60)  # Check every minute
+                if time.time() - self._last_activity > self._timeout_seconds:
+                    await self.timeout_shutdown()
+                    break
+
+        if self._timeout_task is None:
+            self._timeout_task = asyncio.create_task(timeout_monitor())
+
+    def update_activity(self):
+        """Update last activity timestamp."""
+        self._last_activity = time.time()
+
+    async def timeout_shutdown(self):
+        """Shutdown due to timeout."""
+        logging.info("MATLAB engine shutting down due to inactivity")
+        await self.force_shutdown()
+
+    async def force_shutdown(self):
+        """Force shutdown of MATLAB engine."""
+        global _instance
+        async with _instance_lock:
+            if self._timeout_task:
+                self._timeout_task.cancel()
+                self._timeout_task = None
             if self.engine is not None:
                 self.engine.close()
                 self.engine = None
-            # Force kill any remaining MATLAB processes
-            os.system("pkill -f MATLAB")
-        except Exception as e:
-            print(f"Error during cleanup: {str(e)}")
-        finally:
-            os._exit(0)
+            self._initialized = False
+            _instance = None
+    
+    def close(self) -> None:
+        """Clean up server resources on process exit."""
+        if self.engine is not None:
+            self.engine.close()
+            self.engine = None
+        if self._timeout_task:
+            self._timeout_task.cancel()
+            self._timeout_task = None
 
 
 # Define tools at module level

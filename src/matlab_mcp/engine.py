@@ -201,15 +201,14 @@ class MatlabEngine:
                     else:
                         self.eng.workspace[name] = value
 
-            # Execute script and capture output
+            # Set up diary to capture output
             diary_file = self.output_dir / "matlab_output.txt"
-            output = ""
+            if diary_file.exists():
+                diary_file.unlink()
+            self.eng.eval(f"diary('{diary_file}')", nargout=0)
+            self.eng.eval("diary on", nargout=0)
             
             try:
-                # Set up diary to capture output
-                self.eng.eval(f"diary('{diary_file}')", nargout=0)
-                self.eng.eval("diary on", nargout=0)
-                
                 # Execute script
                 if is_file:
                     script_path = Path(script)
@@ -217,21 +216,30 @@ class MatlabEngine:
                         raise FileNotFoundError(f"Script not found: {script}")
                     if ctx:
                         ctx.info(f"Executing MATLAB script: {script_path}")
-                    self.eng.run(str(script_path), nargout=0)
+                    script_content = script_path.read_text()
+                    self.eng.eval(script_content, nargout=0)
                 else:
                     if ctx:
                         ctx.info("Executing MATLAB command")
                         print(f"Executing MATLAB command: {script}", file=sys.stderr)
                     self.eng.eval(script, nargout=0)
+                
+                # Ensure all output is written
+                self.eng.eval("diary off", nargout=0)
+                
+                # Read output from diary file
+                output = ""
+                if diary_file.exists():
+                    output = diary_file.read_text()
+                    diary_file.unlink()
+                    if ctx:
+                        print(f"MATLAB Output from diary: {output}", file=sys.stderr)
             finally:
-                # Turn off diary and read the output
+                # Make sure diary is turned off
                 try:
                     self.eng.eval("diary off", nargout=0)
-                    if diary_file.exists():
-                        output = diary_file.read_text()
-                        diary_file.unlink()  # Clean up
-                except Exception as e:
-                    print(f"Error reading diary: {e}", file=sys.stderr)
+                except Exception:
+                    pass
 
             # Get workspace state synchronously
             workspace = {}
