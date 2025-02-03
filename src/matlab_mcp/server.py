@@ -170,7 +170,7 @@ async def execute_script(
 
 @mcp.tool()
 async def execute_section(
-    script_name: str = Field(description="Name of the script file"),
+    script_name: str = Field(description="Name of the script file, the script name should include the full path"),
     section_range: Tuple[int, int] = Field(
         description="Start and end line numbers for the section"
     ),
@@ -185,6 +185,7 @@ async def execute_section(
     ctx: Optional[Context] = None
 ) -> Dict[str, Any]:
     """Execute a specific section of a MATLAB script.
+    To use this tool, you should first the use the `get_script_sections` tool to get the section ranges.
 
     Returns a dictionary containing:
     - output: Section execution output
@@ -195,9 +196,9 @@ async def execute_section(
     server = MatlabServer.get_instance()
     await server.initialize()
 
-    script_path = server.scripts_dir / f"{script_name}.m"
+    script_path = server.scripts_dir / f"{script_name}"
     if not script_path.exists():
-        raise FileNotFoundError(f"Script {script_name}.m not found")
+        raise FileNotFoundError(f"Script {script_name} not found")
 
     if ctx:
         ctx.info(f"Executing section (lines {section_range[0]}-{section_range[1]})")
@@ -244,7 +245,7 @@ async def get_workspace(
 
 @mcp.tool()
 async def get_script_sections(
-    script_name: str = Field(description="Name of the script file"),
+    script_name: str = Field(description="Name of the script file, the script name should include the full path"),
     ctx: Optional[Context] = None
 ) -> List[Dict[str, Any]]:
     """Get information about sections in a MATLAB script.
@@ -257,9 +258,9 @@ async def get_script_sections(
     server = MatlabServer.get_instance()
     await server.initialize()
 
-    script_path = server.scripts_dir / f"{script_name}.m"
+    script_path = server.scripts_dir / f"{script_name}"
     if not script_path.exists():
-        raise FileNotFoundError(f"Script {script_name}.m not found")
+        raise FileNotFoundError(f"Script {script_name}not found")
 
     if ctx:
         ctx.info(f"Getting sections for script: {script_name}")
@@ -269,7 +270,7 @@ async def get_script_sections(
 
 @mcp.tool()
 async def create_matlab_script(
-    script_name: str = Field(description="Name of the script (without .m extension)"),
+    script_name: str = Field(description="Name of the script (include the .m in the name)"),
     code: str = Field(description="MATLAB code to save"),
     ctx: Optional[Context] = None
 ) -> str:
@@ -283,7 +284,7 @@ async def create_matlab_script(
     if not script_name.isidentifier():
         raise ValueError("Script name must be a valid MATLAB identifier")
 
-    script_path = server.scripts_dir / f"{script_name}.m"
+    script_path = server.scripts_dir / f"{script_name}"
     script_path.write_text(code)
 
     if ctx:
@@ -299,9 +300,9 @@ async def get_script_content(script_name: str) -> str:
     server = MatlabServer.get_instance()
     await server.initialize()
 
-    script_path = server.scripts_dir / f"{script_name}.m"
+    script_path = server.scripts_dir / f"{script_name}"
     if not script_path.exists():
-        raise FileNotFoundError(f"Script {script_name}.m not found")
+        raise FileNotFoundError(f"Script {script_name}")
 
     return script_path.read_text()
 
