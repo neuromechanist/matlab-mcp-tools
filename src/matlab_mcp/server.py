@@ -47,9 +47,9 @@ else:
     print("MATLAB MCP Server starting (set MATLAB_MCP_DEBUG=true for debug output)")
 
 
-# Module-level singleton instance and lock
-_instance = None
-_instance_lock = asyncio.Lock()
+# Module-level singleton instance and lock, this is a test to see if it works
+# _instance = None
+# _instance_lock = asyncio.Lock()
 
 
 class MatlabServer:
@@ -75,14 +75,14 @@ class MatlabServer:
         self.scripts_dir.parent.mkdir(parents=True, exist_ok=True)
         self.scripts_dir.mkdir(exist_ok=True)
 
-    @classmethod
-    async def get_instance(cls):
-        """Get singleton instance of MatlabServer."""
-        global _instance
-        async with _instance_lock:
-            if _instance is None:
-                _instance = cls()
-            return _instance
+    # @classmethod
+    # async def get_instance(cls):
+    #     """Get singleton instance of MatlabServer."""
+    #     global _instance
+    #     async with _instance_lock:
+    #         if _instance is None:
+    #             _instance = cls()
+    #         return _instance
 
     async def initialize(self) -> None:
         """Initialize server and engine if not already initialized."""
@@ -102,19 +102,19 @@ class MatlabServer:
                 self.engine.close()
                 self.engine = None
             self._initialized = False
-            _instance = None
+            self.__class__._instance = None
         except Exception as e:
             logging.error(f"Error during shutdown: {str(e)}")
             raise
 
-    def close(self) -> None:
-        """Clean up server resources on process exit."""
-        if self.engine is not None:
-            self.engine.close()
-            self.engine = None
-        if self._timeout_task:
-            self._timeout_task.cancel()
-            self._timeout_task = None
+    # def close(self) -> None:
+    #     """Clean up server resources on process exit."""
+    #     if self.engine is not None:
+    #         self.engine.close()
+    #         self.engine = None
+    #     if self._timeout_task:
+    #         self._timeout_task.cancel()
+    #         self._timeout_task = None
 
 
 # Define tools at module level
