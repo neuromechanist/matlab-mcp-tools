@@ -121,7 +121,11 @@ class MatlabServer:
 @mcp.tool()
 async def execute_script(
     script: str = Field(description="MATLAB code or script to execute"),
-    is_file: bool = Field(description="Whether script is a file path", default=False),
+    is_file: bool = Field(description="Whether script is a file path. If True, script is read from file, make sure to"
+                          " use the full path. Also, if True, it is RECOMMENDED to use the 'get_script_sections' tool"
+                          " to get the section ranges first, and then use the 'execute_section' tool to execute"
+                          " the file section by section.",
+                          default=False),
     workspace_vars: Optional[Dict[str, Any]] = Field(
         description="Variables to inject into workspace",
         default=None
