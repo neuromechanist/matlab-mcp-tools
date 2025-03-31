@@ -174,7 +174,7 @@ async def execute_script(
 
 @mcp.tool()
 async def execute_section(
-    script_name: str = Field(description="Name of the script file, the script name should include the full path"),
+    script_name: str = Field(description="Full absolute path to the script file (must start with '/')"),
     section_range: Tuple[int, int] = Field(
         description="Start and end line numbers for the section"
     ),
@@ -200,9 +200,10 @@ async def execute_section(
     server = MatlabServer.get_instance()
     await server.initialize()
 
-    script_path = server.scripts_dir / f"{script_name}"
-    if not script_path.exists():
-        raise FileNotFoundError(f"Script {script_name} not found")
+    try:
+        script_path = resolve_script_path(server.scripts_dir, script_name)
+    except FileNotFoundError as e:
+        raise FileNotFoundError(str(e))
 
     if ctx:
         ctx.info(f"Executing section (lines {section_range[0]}-{section_range[1]})")
@@ -247,9 +248,24 @@ async def get_workspace(
     return await server.engine.get_workspace()
 
 
+def resolve_script_path(server_scripts_dir: Path, script_name: str) -> Path:
+    """Resolve and validate script path, requiring absolute paths."""
+    path = Path(script_name)
+    
+    if not path.is_absolute():
+        raise ValueError(
+            f"Absolute path required. Received: {script_name}\n"
+            f"Please provide the complete path starting with '/' (e.g., '/Users/username/.../script.m')"
+        )
+        
+    if not path.exists():
+        raise FileNotFoundError(f"Script not found at path: {path}")
+        
+    return path
+
 @mcp.tool()
 async def get_script_sections(
-    script_name: str = Field(description="Name of the script file, the script name should include the full path"),
+    script_name: str = Field(description="Full absolute path to the script file (must start with '/')"),
     ctx: Optional[Context] = None
 ) -> List[Dict[str, Any]]:
     """Get information about sections in a MATLAB script.
@@ -262,12 +278,13 @@ async def get_script_sections(
     server = MatlabServer.get_instance()
     await server.initialize()
 
-    script_path = server.scripts_dir / f"{script_name}"
-    if not script_path.exists():
-        raise FileNotFoundError(f"Script {script_name}not found")
+    try:
+        script_path = resolve_script_path(server.scripts_dir, script_name)
+    except FileNotFoundError as e:
+        raise FileNotFoundError(str(e))
 
     if ctx:
-        ctx.info(f"Getting sections for script: {script_name}")
+        ctx.info(f"Getting sections for script: {script_path}")
 
     return get_section_info(script_path)
 
@@ -300,13 +317,17 @@ async def create_matlab_script(
 # Define resources at module level
 @mcp.resource("matlab://scripts/{script_name}")
 async def get_script_content(script_name: str) -> str:
-    """Get the content of a MATLAB script."""
+    """Get the content of a MATLAB script.
+    
+    The script_name must be a full absolute path (e.g., '/Users/username/.../script.m')
+    """
     server = MatlabServer.get_instance()
     await server.initialize()
 
-    script_path = server.scripts_dir / f"{script_name}"
-    if not script_path.exists():
-        raise FileNotFoundError(f"Script {script_name}")
+    try:
+        script_path = resolve_script_path(server.scripts_dir, script_name)
+    except FileNotFoundError as e:
+        raise FileNotFoundError(str(e))
 
     return script_path.read_text()
 
