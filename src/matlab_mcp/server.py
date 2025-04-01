@@ -285,10 +285,17 @@ async def create_matlab_script(
     server = MatlabServer.get_instance()
     await server.initialize()
 
-    if not script_name.isidentifier():
+    # Remove .m extension if present for validation
+    base_name = script_name[:-2] if script_name.endswith('.m') else script_name
+
+    if not base_name.isidentifier():
         raise ValueError("Script name must be a valid MATLAB identifier")
 
-    script_path = server.scripts_dir / f"{script_name}"
+    # Ensure .m extension is present
+    if not script_name.endswith('.m'):
+        script_name = f"{script_name}.m"
+
+    script_path = server.scripts_dir / script_name
     script_path.write_text(code)
 
     if ctx:
