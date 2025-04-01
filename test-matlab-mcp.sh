@@ -1,15 +1,32 @@
 #!/bin/bash
 set -euo pipefail
 
-# Test if matlab-mcp-server is available
-echo -e "\n=== Testing Installation ==="
-if command -v matlab-mcp-server &> /dev/null; then
-    echo "matlab-mcp-server is available in PATH"
-else
-    echo "Error: matlab-mcp-server not found in PATH"
+# Define variables
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VENV_NAME=".venv"
+VENV_PATH="$SCRIPT_DIR/$VENV_NAME"
+
+# Test if virtual environment exists
+echo -e "\n=== Checking Virtual Environment ==="
+if [ ! -d "$VENV_PATH" ]; then
+    echo "Error: Virtual environment not found at $VENV_PATH"
     echo "Please run ./setup-pip-matlab-mcp.sh first"
     exit 1
 fi
+
+# Test if matlab-mcp-server is available
+echo -e "\n=== Testing Installation ==="
+if [ -f "$VENV_PATH/bin/matlab-mcp-server" ]; then
+    echo "matlab-mcp-server is available in the virtual environment"
+else
+    echo "Error: matlab-mcp-server not found in virtual environment"
+    echo "Please run ./setup-pip-matlab-mcp.sh first"
+    exit 1
+fi
+
+# Activate the virtual environment
+echo "Activating virtual environment"
+source "$VENV_PATH/bin/activate"
 
 # Create a test MATLAB script
 echo -e "\n=== Setting up Test Files ==="
@@ -50,7 +67,7 @@ python -c "import matlab.engine; print('MATLAB engine is properly installed')" |
 # Test starting the server
 echo -e "\n=== Testing Server Startup ==="
 echo "Starting the server in the background (will terminate after 5 seconds)..."
-matlab-mcp-server &
+"$VENV_PATH/bin/matlab-mcp-server" &
 SERVER_PID=$!
 sleep 5
 kill $SERVER_PID 2>/dev/null || true
@@ -61,4 +78,4 @@ echo "To use the MATLAB MCP server with Cursor/Cline, copy the provided configur
 echo "cp mcp-pip.json ~/.cursor/mcp.json"
 echo ""
 echo "To manually start the server, run:"
-echo "matlab-mcp-server"
+echo "$VENV_PATH/bin/matlab-mcp-server"

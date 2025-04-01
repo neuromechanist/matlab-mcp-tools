@@ -4,9 +4,9 @@ A Model Context Protocol (MCP) server that provides tools for developing and run
 
 ## Prerequisites
 
-- Python 3.8+
+- Python 3.10+
 - MATLAB with Python Engine installed
-- uv package manager (recommended)
+- uv package manager (required)
 
 ## Features
 
@@ -23,7 +23,7 @@ A Model Context Protocol (MCP) server that provides tools for developing and run
 
 ## Installation
 
-### Using pip (Recommended)
+### Using uv and pip (Recommended)
 
 1. Clone this repository:
 
@@ -32,7 +32,25 @@ git clone [repository-url]
 cd matlab-mcp-tools
 ```
 
-2. Set the MATLAB path environment variable if your MATLAB is not in the default location:
+2. Install uv if you don't have it yet:
+
+```bash
+# Install uv using Homebrew
+brew install uv
+```
+
+```bash
+# Install uv using pip
+pip install uv
+```
+
+Alternatively, you can install `uv` by installing this repository as a development dependency:
+
+```bash
+pip install -e ".[dev]"
+```
+
+3. Set the MATLAB path environment variable if your MATLAB is not in the default location:
 
 ```bash
 # For macOS (default is /Applications/MATLAB_R2024b.app)
@@ -43,26 +61,33 @@ export MATLAB_PATH=/path/to/your/matlab/installation
 # export MATLAB_PATH="C:/path/to/your/matlab/installation"
 ```
 
-3. Run the setup script to install the package with pip:
+4. Run the setup script to create a virtual environment and install the package:
 
 ```bash
-./setup-pip-matlab-mcp.sh
+./setup-matlab-mcp.sh
 ```
 
-4. Configure Cline/Cursor by copying the provided MCP configuration:
+The setup script will:
+- Check if uv is installed
+- Create a virtual environment in `.venv` directory
+- Install the MATLAB Engine Python package
+- Install the matlab-mcp-server package in development mode
+- Generate an MCP configuration file
+
+5. Configure Cline/Cursor by copying the provided MCP configuration:
 
 ```bash
 # For macOS/Linux
-cp mcp-pip.json ~/.cursor/mcp.json
+cp mcp-config.json ~/.cursor/mcp.json
 
 # For Windows
-# copy mcp-pip.json %USERPROFILE%\.cursor\mcp.json
+# copy mcp-config.json %USERPROFILE%\.cursor\mcp.json
 ```
 
-5. Test the installation:
+6. Test the installation:
 
 ```bash
-./test-pip-matlab-mcp.sh
+./test-matlab-mcp.sh
 ```
 
 After setup, you can run the MATLAB MCP server using:
@@ -70,6 +95,13 @@ After setup, you can run the MATLAB MCP server using:
 ```bash
 matlab-mcp-server
 ```
+
+If the server is not found, check whether the server is installed in the virtual environment:
+
+```bash
+./.venv/bin/matlab-mcp-server
+```
+
 
 Troubleshooting: See [Installation Troubleshooting](#installation-troubleshooting) for common issues and solutions. Don't hesitate to open an issue on the repository if you encounter an issue that is not listed, and a PR if you have a solution.
 
@@ -251,20 +283,20 @@ The tool creates `matlab_output` and `test_output` directories to store:
 
 ## Installation Troubleshooting
 
-1. Note that the `setup-pip-matlab-mcp.sh` script is designed to be run from the root of the repository.
-2. The script is dependent on `pip` and `python` being installed. So make sure you have those installed.
+1. Note that the `setup-matlab-mcp.sh` script is designed to be run from the root of the repository.
+2. The script is dependent on `uv` being installed. So make sure you have it installed (`pip install uv`).
 3. If the scripts run, but you get an ENONET error, make sure that the Python executable used to run the install script is the same Python executable that Cline/Cursor is using. Otherwise, you can specify the Python executable in the MCP configuration file within the `command` and `args` keys. For example:
 
 ```json
 {
       "command": "bash",
-      "args": ["-c", "source $(conda info --base)/etc/profile.d/conda.sh && conda activate target_environment && matlab-mcp-server"],
+      "args": ["-c", "source $(conda info --base)/etc/profile.d/conda.sh && conda activate target_environment && /path/to/your/matlab-mcp-tools/.venv/bin/matlab-mcp-server"],
 }
 ```
 
-In this case, the `target_environment` is the name of the Conda environment that was used to install the `matlab-mcp-tools` package.
+In this case, if you're using Conda, replace `target_environment` with the name of your Conda environment.
 
-4. Running the `setup-pip-matlab-mcp.sh` in Windows requires using Git Bash terminal with ADMIN privileges. This is because the script needs to install the `matlab-mcp-tools` package using `pip` and this requires admin privileges.
+4. Running the `setup-matlab-mcp.sh` in Windows requires using Git Bash terminal with ADMIN privileges. This is because the script needs to install the `matlab-mcp-tools` package and this may require admin privileges.
 
 5. Matlab Python Engine requires specific versions of Python and MATLAB. See the [Matlab Python Engine](https://www.mathworks.com/help/matlab/matlab-engine-for-python.html) and the [Python Versions Compatibility](https://www.mathworks.com/support/requirements/python-compatibility.html) documentations for more information.
 

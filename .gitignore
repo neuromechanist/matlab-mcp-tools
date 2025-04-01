@@ -46,7 +46,7 @@ octave-workspace
 matlab_output/
 test_output/
 *.code-workspace
-mcp-pip.json
+mcp-config.json
 
 # Jupyter
 .ipynb_checkpoints/
