@@ -6,6 +6,7 @@ A Model Context Protocol (MCP) server that provides tools for developing and run
 
 - Python 3.8+
 - MATLAB with Python Engine installed
+- uv package manager (recommended)
 
 ## Features
 
@@ -21,6 +22,50 @@ A Model Context Protocol (MCP) server that provides tools for developing and run
    - Maintain workspace context between sections
 
 ## Installation
+
+### Using pip (Recommended)
+
+1. Clone this repository:
+```bash
+git clone [repository-url]
+cd matlab-mcp-tools
+```
+
+2. Set the MATLAB path environment variable if your MATLAB is not in the default location:
+```bash
+# For macOS (default is /Applications/MATLAB_R2024b.app)
+export MATLAB_PATH=/path/to/your/matlab/installation
+
+# For Windows (default might be C:\Program Files\MATLAB\R2024b)
+# set MATLAB_PATH=C:\path\to\your\matlab\installation
+```
+
+3. Run the setup script to install the package with pip:
+```bash
+./setup-pip-matlab-mcp.sh
+```
+
+4. Configure Cline/Cursor by copying the provided MCP configuration:
+```bash
+# For macOS/Linux
+cp mcp-pip.json ~/.cursor/mcp.json
+
+# For Windows
+# copy mcp-pip.json %USERPROFILE%\.cursor\mcp.json
+```
+
+5. Test the installation:
+```bash
+./test-pip-matlab-mcp.sh
+```
+
+After setup, you can run the MATLAB MCP server using:
+```bash
+matlab-mcp-server
+```
+
+
+### Using Conda (Alternative)
 
 1. Clone this repository:
 
@@ -40,18 +85,61 @@ conda activate matlab-mcp
 pip install -e .
 ```
 
-4. Install MATLAB Engine for Python:
+4. Set the MATLAB path environment variable:
+```bash
+# For macOS (default is /Applications/MATLAB_R2024b.app)
+export MATLAB_PATH=/path/to/your/matlab/installation
+
+# For Windows (default might be C:\Program Files\MATLAB\R2024b)
+# set MATLAB_PATH=C:\path\to\your\matlab\installation
+```
+
+5. Install MATLAB Engine for Python:
 ```bash
 # Navigate to MATLAB engine directory
-cd /Applications/MATLAB_R2024b.app/extern/engines/python
+cd $MATLAB_PATH/extern/engines/python
 
 # Install MATLAB engine
 python setup.py install
 ```
 
-5. Add MATLAB to system PATH:
+6. Add MATLAB to system PATH:
 ```bash
-export PATH="/Applications/MATLAB_R2024b.app/:$PATH"
+# For macOS/Linux
+export PATH="$MATLAB_PATH/bin:$PATH"
+
+# For Windows
+# set PATH=%MATLAB_PATH%\bin;%PATH%
+```
+
+7. Create a configuration file for Cline/Cursor:
+```bash
+cat > mcp-conda.json << EOF
+{
+  "mcpServers": {
+    "matlab": {
+      "command": "matlab-mcp-server",
+      "args": [],
+      "env": {
+        "MATLAB_PATH": "\${MATLAB_PATH}",
+        "PATH": "\${MATLAB_PATH}/bin:\${PATH}"
+      },
+      "disabled": false,
+      "autoApprove": [
+        "list_tools",
+        "get_script_sections"
+      ]
+    }
+  }
+}
+EOF
+
+# Copy to Cline/Cursor configuration
+# For macOS/Linux
+cp mcp-conda.json ~/.cursor/mcp.json
+
+# For Windows
+# copy mcp-conda.json %USERPROFILE%\.cursor\mcp.json
 ```
 
 ## Usage

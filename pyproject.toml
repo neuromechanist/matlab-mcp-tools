@@ -15,7 +15,7 @@ readme = "README.md"
 license = { file = "LICENSE" }
 
 [project.scripts]
-matlab-mcp = "matlab_mcp.server:main"
+matlab-mcp-server = "matlab_mcp.server:main"
 
 [build-system]
 requires = ["setuptools>=61.0"]
