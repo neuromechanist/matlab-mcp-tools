@@ -93,8 +93,15 @@ cp mcp-config.json ~/.cursor/mcp.json
 After setup, you can run the MATLAB MCP server using:
 
 ```bash
+matlab-mcp-server
+```
+
+If the server is not found, check whether the server is installed in the virtual environment:
+
+```bash
 ./.venv/bin/matlab-mcp-server
 ```
+
 
 Troubleshooting: See [Installation Troubleshooting](#installation-troubleshooting) for common issues and solutions. Don't hesitate to open an issue on the repository if you encounter an issue that is not listed, and a PR if you have a solution.
 
@@ -102,7 +109,7 @@ Troubleshooting: See [Installation Troubleshooting](#installation-troubleshootin
 
 1. Start the MCP server:
 ```bash
-./.venv/bin/matlab-mcp-server
+matlab-mcp-server
 ```
 
 This is equivalent to running:
@@ -128,7 +135,7 @@ Use the tools with Cline or other MCP-compatible clients.
 {
   "mcpServers": {
     "matlab": {
-      "command": "/path/to/your/matlab-mcp-tools/.venv/bin/matlab-mcp-server",
+      "command": "matlab-mcp-server",
       "args": [],
       "env": {
         "MATLAB_PATH": "${MATLAB_PATH}",
