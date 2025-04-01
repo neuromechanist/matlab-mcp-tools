@@ -36,8 +36,9 @@ cd matlab-mcp-tools
 # For macOS (default is /Applications/MATLAB_R2024b.app)
 export MATLAB_PATH=/path/to/your/matlab/installation
 
-# For Windows (default might be C:\Program Files\MATLAB\R2024b)
-# set MATLAB_PATH=C:\path\to\your\matlab\installation
+# For Windows use Git Bash terminal (default might be C:\Program Files\MATLAB\R2024b)
+# Also use forward slashes and double quotes for paths with spaces
+# export MATLAB_PATH="C:/path/to/your/matlab/installation"
 ```
 
 3. Run the setup script to install the package with pip:
