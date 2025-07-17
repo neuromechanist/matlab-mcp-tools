@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/neuromechanist-matlab-mcp-tools-badge.png)](https://mseep.ai/app/neuromechanist-matlab-mcp-tools)
+
 # MATLAB MCP Tool
 
 A Model Context Protocol (MCP) server that provides tools for developing and running MATLAB files. This tool integrates with Cline and other MCP-compatible clients to provide interactive MATLAB development capabilities.
