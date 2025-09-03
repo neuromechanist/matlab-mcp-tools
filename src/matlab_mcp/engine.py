@@ -16,9 +16,11 @@ from PIL import Image
 
 from .models import (
     CompressionConfig,
+    ConnectionStatus,
     ExecutionResult,
     FigureData,
     FigureFormat,
+    MemoryStatus,
     PerformanceConfig,
 )
 from .utils.section_parser import extract_section
@@ -906,6 +908,123 @@ class MatlabEngine:
                 workspace[var] = f"<Error reading variable: {str(e)}>"
 
         return workspace
+
+    async def get_memory_status(self) -> MemoryStatus:
+        """Get current workspace memory status."""
+        try:
+            # Get workspace info using whos
+            workspace_info = self.eng.eval("whos", nargout=1)
+
+            if not workspace_info:
+                return MemoryStatus(
+                    total_size_mb=0.0,
+                    variable_count=0,
+                    largest_variable=None,
+                    largest_variable_size_mb=0.0,
+                    memory_limit_mb=self.config.memory_limit_mb,
+                    near_limit=False,
+                )
+
+            total_bytes = 0
+            variable_info = []
+
+            for var_info in workspace_info:
+                var_bytes = var_info.get("bytes", 0)
+                total_bytes += var_bytes
+                variable_info.append(
+                    {
+                        "name": var_info.get("name", "Unknown"),
+                        "size_mb": var_bytes / (1024 * 1024),
+                        "bytes": var_bytes,
+                    }
+                )
+
+            # Sort by size to find largest variable
+            variable_info.sort(key=lambda x: x["bytes"], reverse=True)
+
+            largest_variable = variable_info[0]["name"] if variable_info else None
+            largest_variable_size_mb = (
+                variable_info[0]["size_mb"] if variable_info else 0.0
+            )
+
+            total_size_mb = total_bytes / (1024 * 1024)
+
+            # Check if near memory limit
+            near_limit = False
+            if self.config.memory_limit_mb:
+                near_limit = total_size_mb > (self.config.memory_limit_mb * 0.8)
+
+            return MemoryStatus(
+                total_size_mb=total_size_mb,
+                variable_count=len(variable_info),
+                largest_variable=largest_variable,
+                largest_variable_size_mb=largest_variable_size_mb,
+                memory_limit_mb=self.config.memory_limit_mb,
+                near_limit=near_limit,
+            )
+
+        except Exception as e:
+            print(f"Error getting memory status: {e}", file=sys.stderr)
+            return MemoryStatus(
+                total_size_mb=0.0,
+                variable_count=0,
+                largest_variable=None,
+                largest_variable_size_mb=0.0,
+                memory_limit_mb=self.config.memory_limit_mb,
+                near_limit=False,
+            )
+
+    async def check_memory_limit(self) -> bool:
+        """Check if memory usage exceeds configured limit."""
+        if not self.config.memory_limit_mb:
+            return False
+
+        memory_status = await self.get_memory_status()
+        return memory_status.total_size_mb > self.config.memory_limit_mb
+
+    async def clear_large_variables(self, threshold_mb: float = 50.0) -> List[str]:
+        """Clear variables larger than the specified threshold."""
+        try:
+            workspace_info = self.eng.eval("whos", nargout=1)
+            if not workspace_info:
+                return []
+
+            cleared_vars = []
+            for var_info in workspace_info:
+                var_name = var_info.get("name", "")
+                var_bytes = var_info.get("bytes", 0)
+                var_size_mb = var_bytes / (1024 * 1024)
+
+                if var_size_mb > threshold_mb:
+                    try:
+                        self.eng.eval(f"clear {var_name}", nargout=0)
+                        cleared_vars.append(var_name)
+                        print(
+                            f"Cleared large variable: {var_name} ({var_size_mb:.1f} MB)",
+                            file=sys.stderr,
+                        )
+                    except Exception as e:
+                        print(
+                            f"Error clearing variable {var_name}: {e}", file=sys.stderr
+                        )
+
+            return cleared_vars
+
+        except Exception as e:
+            print(f"Error clearing large variables: {e}", file=sys.stderr)
+            return []
+
+    async def get_connection_status(self) -> ConnectionStatus:
+        """Get current connection status information."""
+        is_connected = self.eng is not None
+        uptime = time.time() - self.connection_start_time
+
+        return ConnectionStatus(
+            is_connected=is_connected,
+            connection_id=self.connection_id,
+            uptime_seconds=uptime,
+            last_activity=self.last_activity,
+        )
 
     async def execute_section(
         self,
