@@ -53,3 +53,7 @@ mcp-config.json
 
 # DS_Store
 .DS_Store
+# Claude specific files
+CLAUDE.md
+.rules/
+.context/
