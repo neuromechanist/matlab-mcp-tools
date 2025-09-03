@@ -4,6 +4,7 @@ import io
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -539,6 +540,105 @@ class MatlabEngine:
         finally:
             # Always clean up, even if an error occurred
             await self.cleanup_figures()
+
+    async def benchmark_compression(self, test_plots: bool = True) -> dict:
+        """Benchmark figure compression performance.
+
+        Args:
+            test_plots: Whether to generate test plots for benchmarking
+
+        Returns:
+            Dictionary containing benchmark results
+        """
+        results = {"timestamp": time.time(), "test_configurations": [], "summary": {}}
+
+        # Test configurations for benchmarking
+        test_configs = [
+            CompressionConfig(
+                quality=95, dpi=150, optimize_for="quality", smart_optimization=False
+            ),
+            CompressionConfig(
+                quality=75, dpi=150, optimize_for="size", smart_optimization=True
+            ),
+            CompressionConfig(
+                quality=50, dpi=100, optimize_for="size", smart_optimization=True
+            ),
+        ]
+
+        try:
+            if test_plots:
+                # Generate a test plot
+                test_script = """
+                x = linspace(0, 4*pi, 100);
+                y = sin(x) + 0.1 * cos(10*x);
+                figure;
+                plot(x, y, 'b-', 'LineWidth', 2);
+                title('Compression Test Plot');
+                xlabel('X'); ylabel('Y');
+                grid on;
+                """
+                await self.execute(test_script, capture_plots=False)
+
+            # Test each configuration
+            for i, config in enumerate(test_configs):
+                start_time = time.time()
+                figures = await self._capture_figures(config)
+                end_time = time.time()
+
+                if figures:
+                    fig = figures[0]
+                    processing_time = end_time - start_time
+
+                    original_size = fig.original_size or 0
+                    compressed_size = fig.compressed_size or 0
+                    compression_ratio = (
+                        (1 - compressed_size / original_size) * 100
+                        if original_size > 0
+                        else 0
+                    )
+
+                    config_result = {
+                        "config_name": f"Config_{i + 1}",
+                        "quality": config.quality,
+                        "dpi": config.dpi,
+                        "optimize_for": config.optimize_for,
+                        "smart_optimization": config.smart_optimization,
+                        "original_size_bytes": original_size,
+                        "compressed_size_bytes": compressed_size,
+                        "compression_ratio_percent": compression_ratio,
+                        "processing_time_seconds": processing_time,
+                    }
+
+                    results["test_configurations"].append(config_result)
+
+            # Calculate summary statistics
+            if results["test_configurations"]:
+                avg_compression = sum(
+                    r["compression_ratio_percent"]
+                    for r in results["test_configurations"]
+                ) / len(results["test_configurations"])
+                max_compression = max(
+                    r["compression_ratio_percent"]
+                    for r in results["test_configurations"]
+                )
+                avg_processing_time = sum(
+                    r["processing_time_seconds"] for r in results["test_configurations"]
+                ) / len(results["test_configurations"])
+
+                results["summary"] = {
+                    "average_compression_ratio": avg_compression,
+                    "maximum_compression_ratio": max_compression,
+                    "average_processing_time": avg_processing_time,
+                    "configurations_tested": len(results["test_configurations"]),
+                }
+
+        except Exception as e:
+            results["error"] = str(e)
+
+        finally:
+            await self.cleanup_figures()
+
+        return results
 
     async def get_workspace(self) -> Dict[str, Any]:
         """Get current MATLAB workspace variables.
