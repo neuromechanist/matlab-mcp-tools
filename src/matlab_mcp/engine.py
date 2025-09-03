@@ -13,10 +13,28 @@ from .models import ExecutionResult, FigureData, FigureFormat
 from .utils.section_parser import extract_section
 
 
+class WorkspaceConfig:
+    """Configuration for workspace data transfer optimization."""
+
+    def __init__(
+        self,
+        small_threshold: int = 100,
+        medium_threshold: int = 10000,
+        preview_elements: int = 3,
+        max_string_length: int = 200,
+    ):
+        self.small_threshold = small_threshold  # Elements: return full data
+        self.medium_threshold = medium_threshold  # Elements: return sample + stats
+        self.preview_elements = preview_elements  # Number of elements in preview
+        self.max_string_length = (
+            max_string_length  # Max string length before truncation
+        )
+
+
 class MatlabEngine:
     """Wrapper for MATLAB engine with enhanced functionality."""
 
-    def __init__(self):
+    def __init__(self, workspace_config: Optional[WorkspaceConfig] = None):
         """Initialize MATLAB engine wrapper."""
         self.eng = None
         # Use .mcp directory in home for all outputs
@@ -25,6 +43,9 @@ class MatlabEngine:
         self.output_dir.parent.mkdir(parents=True, exist_ok=True)
         self.output_dir.mkdir(exist_ok=True)
         self.matlab_path = os.getenv("MATLAB_PATH", "/Applications/MATLAB_R2024b.app")
+
+        # Workspace optimization configuration
+        self.workspace_config = workspace_config or WorkspaceConfig()
 
     async def initialize(self) -> None:
         """Initialize MATLAB engine if not already running."""
@@ -326,9 +347,10 @@ class MatlabEngine:
         workspace = {}
         var_names = self.eng.eval("who", nargout=1)
 
-        # Size thresholds for different handling strategies
-        SMALL_THRESHOLD = 100  # Elements: return full data
-        MEDIUM_THRESHOLD = 10000  # Elements: return sample + stats
+        # Use configurable thresholds
+        SMALL_THRESHOLD = self.workspace_config.small_threshold
+        MEDIUM_THRESHOLD = self.workspace_config.medium_threshold
+        PREVIEW_ELEMENTS = self.workspace_config.preview_elements
 
         for var in var_names:
             try:
@@ -371,7 +393,8 @@ class MatlabEngine:
                                 "sample_data": [
                                     float(x)
                                     for x in self.eng.eval(
-                                        f"{var}(1:min(5,numel({var})))", nargout=1
+                                        f"{var}(1:min({PREVIEW_ELEMENTS + 2},numel({var})))",
+                                        nargout=1,
                                     )._data
                                 ],
                                 "memory_usage_mb": round(
@@ -400,7 +423,8 @@ class MatlabEngine:
                                 "sample_data": [
                                     float(x)
                                     for x in self.eng.eval(
-                                        f"{var}(1:min(3,numel({var})))", nargout=1
+                                        f"{var}(1:min({PREVIEW_ELEMENTS},numel({var})))",
+                                        nargout=1,
                                     )._data
                                 ],
                                 "memory_usage_mb": round(
@@ -417,10 +441,12 @@ class MatlabEngine:
                     try:
                         workspace[var] = value._data.tolist()
                     except Exception:
+                        str_val = str(value)
+                        max_len = self.workspace_config.max_string_length
                         workspace[var] = (
-                            str(value)[:200] + "..."
-                            if len(str(value)) > 200
-                            else str(value)
+                            str_val[:max_len] + "..."
+                            if len(str_val) > max_len
+                            else str_val
                         )
 
             except Exception as e:
