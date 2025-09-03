@@ -302,12 +302,13 @@ generate_config() {
     show_progress "Generating MCP configuration"
     
     local config_file="mcp-pip.json"
+    local abs_venv_path="$(cd "$SCRIPT_DIR" && pwd)/$VENV_NAME"
     
     cat > "$config_file" << EOF
 {
   "mcpServers": {
     "matlab": {
-      "command": "$VENV_PATH/bin/matlab-mcp-server",
+      "command": "$abs_venv_path/bin/matlab-mcp-server",
       "args": [],
       "env": {
         "MATLAB_PATH": "$MATLAB_PATH",
@@ -324,6 +325,12 @@ generate_config() {
 EOF
     
     log_success "Configuration saved to $config_file"
+    
+    # Backup existing MCP config if it exists
+    if [[ -f ~/.cursor/mcp.json ]]; then
+        cp ~/.cursor/mcp.json ~/.cursor/mcp.json.backup.$(date +%Y%m%d_%H%M%S)
+        log_info "Backed up existing MCP config"
+    fi
 }
 
 # Verify installation
@@ -379,17 +386,32 @@ main() {
     
     log_success "MATLAB MCP server is ready to use!"
     echo
-    log_info "Next steps:"
-    echo "  1. Copy configuration to Claude/Cursor:"
-    echo "     cp mcp-pip.json ~/.cursor/mcp.json"
-    echo
-    echo "  2. Start using MATLAB tools in Claude/Cursor!"
-    echo
-    echo "  3. To test manually:"
-    echo "     $VENV_PATH/bin/matlab-mcp-server"
+    
+    # Ask user if they want to automatically configure Cursor
+    echo -n "Would you like to automatically configure Cursor/Claude Code? (y/n): "
+    read -r configure_cursor
+    
+    if [[ "$configure_cursor" =~ ^[Yy]$ ]]; then
+        mkdir -p ~/.cursor
+        cp mcp-pip.json ~/.cursor/mcp.json
+        log_success "Configuration copied to ~/.cursor/mcp.json"
+        echo
+        log_info "Restart Cursor/Claude Code to use MATLAB tools!"
+    else
+        echo
+        log_info "Manual setup required:"
+        echo "  1. Copy configuration to Claude/Cursor:"
+        echo "     cp mcp-pip.json ~/.cursor/mcp.json"
+        echo
+        echo "  2. Restart Cursor/Claude Code"
+    fi
+    
     echo
     log_info "Configuration saved to: $(pwd)/mcp-pip.json"
     log_info "MATLAB path detected: $MATLAB_PATH"
+    echo
+    echo "  To test manually:"
+    echo "     $VENV_PATH/bin/matlab-mcp-server"
 }
 
 # Handle interruption
