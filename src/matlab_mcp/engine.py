@@ -1,6 +1,6 @@
 """MATLAB engine wrapper for MCP Tool."""
 
-import asyncio
+import io
 import os
 import subprocess
 import sys
@@ -12,10 +12,11 @@ from typing import Any, Dict, List, Optional
 
 import matlab.engine
 from mcp.server.fastmcp import Context
+from PIL import Image
 
 from .models import (
+    CompressionConfig,
     ConnectionStatus,
-    EnhancedError,
     ExecutionResult,
     FigureData,
     FigureFormat,
@@ -23,6 +24,24 @@ from .models import (
     PerformanceConfig,
 )
 from .utils.section_parser import extract_section
+
+
+class WorkspaceConfig:
+    """Configuration for workspace data transfer optimization."""
+
+    def __init__(
+        self,
+        small_threshold: int = 100,
+        medium_threshold: int = 10000,
+        preview_elements: int = 3,
+        max_string_length: int = 200,
+    ):
+        self.small_threshold = small_threshold  # Elements: return full data
+        self.medium_threshold = medium_threshold  # Elements: return sample + stats
+        self.preview_elements = preview_elements  # Number of elements in preview
+        self.max_string_length = (
+            max_string_length  # Max string length before truncation
+        )
 
 
 class MatlabConnectionPool:
@@ -130,7 +149,11 @@ class MatlabConnectionPool:
 class MatlabEngine:
     """Wrapper for MATLAB engine with enhanced functionality."""
 
-    def __init__(self, config: Optional[PerformanceConfig] = None):
+    def __init__(
+        self,
+        config: Optional[PerformanceConfig] = None,
+        workspace_config: Optional[WorkspaceConfig] = None,
+    ):
         """Initialize MATLAB engine wrapper."""
         self.eng = None
         # Use .mcp directory in home for all outputs
@@ -139,6 +162,9 @@ class MatlabEngine:
         self.output_dir.parent.mkdir(parents=True, exist_ok=True)
         self.output_dir.mkdir(exist_ok=True)
         self.matlab_path = os.getenv("MATLAB_PATH", "/Applications/MATLAB_R2024b.app")
+
+        # Workspace optimization configuration
+        self.workspace_config = workspace_config or WorkspaceConfig()
 
         # Performance and reliability configuration
         self.config = config or PerformanceConfig()
@@ -159,72 +185,113 @@ class MatlabEngine:
             return
 
         try:
-            print(
-                f"\n=== MATLAB Engine Initialization (ID: {self.connection_id}) ===",
-                file=sys.stderr,
-            )
+            print("\n=== MATLAB Engine Initialization ===", file=sys.stderr)
+            print(f"MATLAB_PATH: {self.matlab_path}", file=sys.stderr)
+            print(f"Python executable: {sys.executable}", file=sys.stderr)
+            print(f"matlab.engine path: {matlab.engine.__file__}", file=sys.stderr)
+            print(f"Current working directory: {os.getcwd()}", file=sys.stderr)
+            print(f"PYTHONPATH: {os.getenv('PYTHONPATH', 'Not set')}", file=sys.stderr)
 
-            # Try to get engine from connection pool
-            self.eng = await self.connection_pool.get_engine(self.connection_id)
-
-            if self.eng is None:
-                # Fallback to traditional initialization if pool fails
-                print(
-                    "Connection pool failed, falling back to direct connection...",
-                    file=sys.stderr,
-                )
-                await self._fallback_initialize()
-            else:
-                print(
-                    f"Using pooled MATLAB connection: {self.connection_id}",
-                    file=sys.stderr,
+            # Verify MATLAB installation
+            if not os.path.exists(self.matlab_path):
+                raise RuntimeError(
+                    f"MATLAB installation not found at {self.matlab_path}. "
+                    "Please verify MATLAB_PATH environment variable."
                 )
 
-                # Test basic MATLAB functionality
-                try:
-                    ver = self.eng.version()
-                    print(f"Connected to MATLAB version: {ver}", file=sys.stderr)
-                except Exception:
-                    # Connection might be stale, try fallback
+            # Try to find all available MATLAB sessions
+            try:
+                sessions = matlab.engine.find_matlab()
+                print(f"Available MATLAB sessions: {sessions}", file=sys.stderr)
+            except Exception as e:
+                print(f"Error finding MATLAB sessions: {e}", file=sys.stderr)
+                sessions = []
+
+            # Try to connect to existing session or start new one
+            try:
+                if sessions:
                     print(
-                        "Pooled connection appears stale, creating new connection...",
+                        "\nFound existing MATLAB sessions, attempting to connect...",
                         file=sys.stderr,
                     )
-                    await self._fallback_initialize()
+                    self.eng = matlab.engine.connect_matlab(sessions[0])
+                else:
+                    print(
+                        "\nNo existing sessions found, starting new MATLAB session...",
+                        file=sys.stderr,
+                    )
+                    self.eng = matlab.engine.start_matlab()
 
-        except Exception as e:
-            print(f"Error with connection pool: {e}", file=sys.stderr)
-            await self._fallback_initialize()
+                if self.eng is None:
+                    raise RuntimeError("MATLAB engine failed to start (returned None)")
 
-        # Create output directory
-        self.output_dir.mkdir(exist_ok=True)
+                # Test basic MATLAB functionality
+                ver = self.eng.version()
+                print(f"Connected to MATLAB version: {ver}", file=sys.stderr)
 
-        # Add current directory to MATLAB path
-        if self.eng is not None:
-            try:
-                self.eng.addpath(str(Path.cwd()), nargout=0)
-            except Exception as e:
+                # Add current directory to MATLAB path
+                cwd = str(Path.cwd())
                 print(
-                    f"Warning: Could not add current directory to path: {e}",
+                    f"Adding current directory to MATLAB path: {cwd}", file=sys.stderr
+                )
+                self.eng.addpath(cwd, nargout=0)
+
+                print("MATLAB engine initialized successfully", file=sys.stderr)
+                return
+
+            except Exception as e:
+                print(f"Error starting MATLAB engine: {e}", file=sys.stderr)
+                # Try to install MATLAB engine if not found
+                engine_setup = Path(self.matlab_path) / "extern/engines/python/setup.py"
+                if not engine_setup.exists():
+                    raise RuntimeError(
+                        f"MATLAB Python engine setup not found at {engine_setup}. "
+                        "Please verify your MATLAB installation."
+                    ) from e
+
+                print(
+                    f"Attempting to install MATLAB engine from {engine_setup}...",
                     file=sys.stderr,
                 )
-        else:
-            raise RuntimeError("MATLAB engine is still None after initialization")
+                try:
+                    result = subprocess.run(
+                        [sys.executable, str(engine_setup), "install"],
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                    )
+                    print("MATLAB engine installed successfully.", file=sys.stderr)
+                    print(result.stdout, file=sys.stderr)
 
-    async def _fallback_initialize(self) -> None:
-        """Fallback initialization without connection pool."""
-        try:
-            sessions = matlab.engine.find_matlab()
-            if sessions:
-                self.eng = matlab.engine.connect_matlab(sessions[0])
-            else:
-                self.eng = matlab.engine.start_matlab()
+                    # Try starting engine again after installation
+                    self.eng = matlab.engine.start_matlab()
+                    if self.eng is None:
+                        raise RuntimeError(
+                            "MATLAB engine failed to start after installation"
+                        )
 
-            if self.eng is None:
-                raise RuntimeError("MATLAB engine failed to start")
+                    ver = self.eng.version()
+                    print(f"Connected to MATLAB version: {ver}", file=sys.stderr)
+                    print(
+                        "MATLAB engine initialized successfully after installation",
+                        file=sys.stderr,
+                    )
+                except subprocess.CalledProcessError as e:
+                    raise RuntimeError(
+                        f"Failed to install MATLAB engine:\n"
+                        f"stdout: {e.stdout}\n"
+                        f"stderr: {e.stderr}\n"
+                        "Please try installing manually."
+                    ) from e
+        except (ImportError, RuntimeError) as e:
+            print(f"Error starting MATLAB engine: {str(e)}", file=sys.stderr)
+            # Try to install MATLAB engine if not found
+            if not os.path.exists(self.matlab_path):
+                raise RuntimeError(
+                    f"MATLAB installation not found at {self.matlab_path}. "
+                    "Please set MATLAB_PATH environment variable."
+                ) from e
 
-        except Exception as e:
-            # Try to install MATLAB engine if needed
             engine_setup = Path(self.matlab_path) / "extern/engines/python/setup.py"
             if not engine_setup.exists():
                 raise RuntimeError(
@@ -240,81 +307,26 @@ class MatlabEngine:
                     capture_output=True,
                     text=True,
                 )
+                print("MATLAB engine installed successfully.", file=sys.stderr)
                 self.eng = matlab.engine.start_matlab()
                 if self.eng is None:
                     raise RuntimeError(
                         "MATLAB engine failed to start after installation"
                     )
-            except subprocess.CalledProcessError as install_e:
+            except subprocess.CalledProcessError as e:
                 raise RuntimeError(
-                    f"Failed to install MATLAB engine: {install_e.stderr}\n"
+                    f"Failed to install MATLAB engine: {e.stderr}\n"
                     "Please try installing manually."
-                ) from install_e
+                ) from e
 
-    async def _execute_with_timeout(
-        self, matlab_command: str, timeout_seconds: Optional[int] = None
-    ) -> str:
-        """Execute MATLAB command with timeout protection.
+        # Create output directory
+        self.output_dir.mkdir(exist_ok=True)
 
-        Args:
-            matlab_command: MATLAB command to execute
-            timeout_seconds: Timeout in seconds, uses config default if None
-
-        Returns:
-            Command output
-
-        Raises:
-            TimeoutError: If command exceeds timeout
-            matlab.engine.MatlabExecutionError: If MATLAB execution fails
-        """
-        if self.eng is None:
-            raise RuntimeError("MATLAB engine not initialized")
-
-        timeout = timeout_seconds or self.config.execution_timeout_seconds
-
-        if not timeout:
-            # No timeout configured, execute normally
-            return self.eng.eval(matlab_command, nargout=0)
-
-        # Create a result container and exception container
-        result = {"output": None, "error": None, "completed": False}
-
-        def execute_command():
-            """Execute the MATLAB command in a separate thread."""
-            try:
-                output = self.eng.eval(matlab_command, nargout=0)
-                result["output"] = output
-                result["completed"] = True
-            except Exception as e:
-                result["error"] = e
-                result["completed"] = True
-
-        # Start execution in a separate thread
-        execution_thread = threading.Thread(target=execute_command, daemon=True)
-        execution_thread.start()
-
-        # Wait for completion or timeout
-        start_time = time.time()
-        while not result["completed"] and (time.time() - start_time) < timeout:
-            await asyncio.sleep(0.1)  # Check every 100ms
-
-        if not result["completed"]:
-            # Timeout occurred - try to interrupt MATLAB
-            try:
-                # Send Ctrl+C to MATLAB process
-                self.eng.eval("dbquit all", nargout=0)
-            except Exception:
-                pass  # May fail if MATLAB is hung
-
-            raise TimeoutError(
-                f"MATLAB execution timed out after {timeout} seconds. "
-                "Command may be stuck in infinite loop."
-            )
-
-        if result["error"]:
-            raise result["error"]
-
-        return result["output"]
+        # Add current directory to MATLAB path
+        if self.eng is not None:
+            self.eng.addpath(str(Path.cwd()))
+        else:
+            raise RuntimeError("MATLAB engine is still None after initialization")
 
     async def execute(
         self,
@@ -322,6 +334,7 @@ class MatlabEngine:
         is_file: bool = False,
         workspace_vars: Optional[Dict[str, Any]] = None,
         capture_plots: bool = True,
+        compression_config: Optional[CompressionConfig] = None,
         ctx: Optional[Context] = None,
     ) -> ExecutionResult:
         """Execute a MATLAB script or command.
@@ -331,15 +344,13 @@ class MatlabEngine:
             is_file: Whether script is a file path
             workspace_vars: Variables to inject into workspace
             capture_plots: Whether to capture generated plots
+            compression_config: Optional compression settings for figures
             ctx: MCP context for progress reporting
 
         Returns:
             ExecutionResult containing output, workspace state, and figures
         """
         await self.initialize()
-
-        # Track execution time
-        start_time = time.time()
 
         try:
             # Clear existing figures if capturing plots
@@ -359,31 +370,11 @@ class MatlabEngine:
                     else:
                         self.eng.workspace[name] = value
 
-            # Check memory limit before execution
-            if self.config.memory_limit_mb:
-                memory_exceeded = await self.check_memory_limit()
-                if memory_exceeded:
-                    if ctx:
-                        ctx.warning("Memory limit exceeded, clearing large variables")
-                    cleared = await self.clear_large_variables()
-                    print(
-                        f"Cleared {len(cleared)} large variables to free memory",
-                        file=sys.stderr,
-                    )
-
-            # Execute script with timeout protection
+            # Execute script
             if is_file:
                 script_path = Path(script)
                 if not script_path.exists():
                     raise FileNotFoundError(f"Script not found: {script}")
-
-                # Check for hot reload if enabled
-                if self.config.enable_hot_reload:
-                    await self.watch_file(script)
-                    if self._reload_file_if_changed(script):
-                        if ctx:
-                            ctx.info(f"File changed, reloading: {script_path}")
-
                 if ctx:
                     ctx.info(f"Executing MATLAB script: {script_path}")
                 output = self.eng.run(str(script_path), nargout=0)
@@ -391,105 +382,35 @@ class MatlabEngine:
                 if ctx:
                     ctx.info("Executing MATLAB command")
                     print(f"Executing MATLAB command: {script}", file=sys.stderr)
-                # Use timeout-protected execution
-                output = await self._execute_with_timeout(script)
-
-            # Update last activity time
-            self.last_activity = time.time()
-            execution_time = self.last_activity - start_time
+                # Don't pass stdout/stderr to eval since we're not in a terminal
+                output = self.eng.eval(script, nargout=0)
 
             # Capture figures if requested
             figures = []
             if capture_plots:
-                figures = await self._capture_figures()
+                figures = await self._capture_figures(compression_config)
 
-            # Get workspace state and memory status
+            # Get workspace state
             workspace = await self.get_workspace()
-            memory_status = await self.get_memory_status()
 
             return ExecutionResult(
                 output=str(output) if output else "",
                 workspace=workspace,
                 figures=figures,
-                execution_time_seconds=execution_time,
-                memory_status=memory_status,
             )
 
-        except TimeoutError as e:
-            execution_time = time.time() - start_time
-            error_msg = f"Execution Timeout: {str(e)}"
-            print(error_msg, file=sys.stderr)
-            if ctx:
-                ctx.error(error_msg)
-
-            # Create enhanced error information
-            enhanced_error = self._create_enhanced_error(e, script, is_file)
-
-            # Try to get memory status even after timeout
-            try:
-                memory_status = await self.get_memory_status()
-            except Exception:
-                memory_status = None
-
-            return ExecutionResult(
-                output="",
-                error=error_msg,
-                enhanced_error=enhanced_error,
-                workspace={},
-                figures=[],
-                execution_time_seconds=execution_time,
-                memory_status=memory_status,
-            )
         except matlab.engine.MatlabExecutionError as e:
-            execution_time = time.time() - start_time
             error_msg = f"MATLAB Error: {str(e)}"
             print(error_msg, file=sys.stderr)
             if ctx:
                 ctx.error(error_msg)
-
-            # Create enhanced error information
-            enhanced_error = self._create_enhanced_error(e, script, is_file)
-
-            # Try to get memory status even after error
-            try:
-                memory_status = await self.get_memory_status()
-            except Exception:
-                memory_status = None
-
-            return ExecutionResult(
-                output="",
-                error=error_msg,
-                enhanced_error=enhanced_error,
-                workspace={},
-                figures=[],
-                execution_time_seconds=execution_time,
-                memory_status=memory_status,
-            )
+            return ExecutionResult(output="", error=error_msg, workspace={}, figures=[])
         except Exception as e:
-            execution_time = time.time() - start_time
             error_msg = f"Python Error: {str(e)}"
             print(error_msg, file=sys.stderr)
             if ctx:
                 ctx.error(error_msg)
-
-            # Create enhanced error information
-            enhanced_error = self._create_enhanced_error(e, script, is_file)
-
-            # Try to get memory status even after error
-            try:
-                memory_status = await self.get_memory_status()
-            except Exception:
-                memory_status = None
-
-            return ExecutionResult(
-                output="",
-                error=error_msg,
-                enhanced_error=enhanced_error,
-                workspace={},
-                figures=[],
-                execution_time_seconds=execution_time,
-                memory_status=memory_status,
-            )
+            return ExecutionResult(output="", error=error_msg, workspace={}, figures=[])
 
     async def cleanup_figures(self) -> None:
         """Clean up MATLAB figures and temporary files."""
@@ -507,129 +428,537 @@ class MatlabEngine:
             except Exception as e:
                 print(f"Error during figure cleanup: {e}", file=sys.stderr)
 
-    async def _capture_figures(self) -> List[FigureData]:
-        """Capture current MATLAB figures in both PNG and SVG formats with proper cleanup.
+    def _compress_png(
+        self, png_path: Path, compression_config: CompressionConfig
+    ) -> bytes:
+        """Compress PNG image using PIL/Pillow with optimization.
+
+        Args:
+            png_path: Path to the original PNG file
+            compression_config: Compression settings
 
         Returns:
-            List of FigureData containing both PNG and SVG versions of each figure
+            Compressed PNG data as bytes
         """
+        with Image.open(png_path) as img:
+            # Convert to RGB if necessary (removes alpha channel which increases file size)
+            if img.mode in ("RGBA", "LA", "P"):
+                # Create white background for transparency
+                background = Image.new("RGB", img.size, (255, 255, 255))
+                if img.mode == "P":
+                    img = img.convert("RGBA")
+                background.paste(
+                    img, mask=img.split()[-1] if img.mode in ("RGBA", "LA") else None
+                )
+                img = background
+            elif img.mode != "RGB":
+                img = img.convert("RGB")
+
+            # Apply compression based on quality setting
+            buffer = io.BytesIO()
+
+            # Map quality (1-100) to PNG compression level (0-9, where 9 is max compression)
+            # Higher quality = lower compression level for PNG
+            png_compress_level = max(
+                0, min(9, int((100 - compression_config.quality) / 11))
+            )
+
+            img.save(
+                buffer, format="PNG", optimize=True, compress_level=png_compress_level
+            )
+
+            return buffer.getvalue()
+
+    def _analyze_figure_content(self, figure_num: int) -> dict:
+        """Analyze figure content to determine optimal compression settings.
+
+        Args:
+            figure_num: Figure number to analyze
+
+        Returns:
+            Dictionary containing content analysis results
+        """
+        try:
+            # Get figure handle and analyze its content
+            analysis = {
+                "has_image_data": False,
+                "has_line_plots": False,
+                "has_text": False,
+                "has_patches": False,
+                "complexity_score": 0,
+                "recommended_quality": 75,
+            }
+
+            # Analyze figure children to understand content type
+            children_cmd = f"get(figure({figure_num}), 'Children')"
+            axes_handles = self.eng.eval(children_cmd, nargout=1)
+
+            if axes_handles:
+                for ax_idx in range(
+                    len(axes_handles) if hasattr(axes_handles, "__len__") else 1
+                ):
+                    # Get axes children (plots, images, text, etc.)
+                    ax_children_cmd = f"children = get(figure({figure_num}).Children({ax_idx + 1}), 'Children'); cellfun(@(x) class(x), children, 'UniformOutput', false)"
+
+                    try:
+                        child_types = self.eng.eval(ax_children_cmd, nargout=1)
+                        if child_types:
+                            for child_type in child_types:
+                                child_type_str = str(child_type).lower()
+
+                                if (
+                                    "image" in child_type_str
+                                    or "surface" in child_type_str
+                                ):
+                                    analysis["has_image_data"] = True
+                                    analysis["complexity_score"] += 3
+                                elif "line" in child_type_str:
+                                    analysis["has_line_plots"] = True
+                                    analysis["complexity_score"] += 1
+                                elif "text" in child_type_str:
+                                    analysis["has_text"] = True
+                                    analysis["complexity_score"] += 1
+                                elif "patch" in child_type_str:
+                                    analysis["has_patches"] = True
+                                    analysis["complexity_score"] += 2
+                    except Exception:
+                        # If analysis fails, use default values
+                        pass
+
+            # Determine recommended quality based on content
+            if analysis["has_image_data"]:
+                # Image data benefits from higher quality
+                analysis["recommended_quality"] = 85
+            elif analysis["has_patches"] or analysis["complexity_score"] > 5:
+                # Complex plots benefit from medium-high quality
+                analysis["recommended_quality"] = 75
+            elif analysis["has_line_plots"] and not analysis["has_text"]:
+                # Simple line plots can use lower quality
+                analysis["recommended_quality"] = 65
+            else:
+                # Default medium quality
+                analysis["recommended_quality"] = 70
+
+            return analysis
+
+        except Exception as e:
+            print(f"Error analyzing figure content: {e}", file=sys.stderr)
+            return {
+                "has_image_data": False,
+                "has_line_plots": True,  # Conservative default
+                "has_text": False,
+                "has_patches": False,
+                "complexity_score": 2,
+                "recommended_quality": 70,
+            }
+
+    async def _capture_figures(
+        self, compression_config: Optional[CompressionConfig] = None
+    ) -> List[FigureData]:
+        """Capture current MATLAB figures with optimized compression.
+
+        Args:
+            compression_config: Optional compression settings. If None, uses defaults.
+
+        Returns:
+            List of FigureData containing optimized PNG figures
+        """
+        if compression_config is None:
+            compression_config = CompressionConfig()
+
         try:
             figures = []
             fig_handles = self.eng.eval('get(groot, "Children")', nargout=1)
 
             if fig_handles:
                 for i, _ in enumerate(fig_handles):
-                    figure_data = []
-
-                    # Save as PNG
+                    # Generate optimized PNG with compression settings
                     png_file = self.output_dir / f"figure_{i}.png"
-                    self.eng.eval(f"saveas(figure({i + 1}), '{png_file}')", nargout=0)
-                    with open(png_file, "rb") as f:
-                        figure_data.append(
-                            FigureData(data=f.read(), format=FigureFormat.PNG)
-                        )
 
-                    # Save as SVG
-                    svg_file = self.output_dir / f"figure_{i}.svg"
-                    self.eng.eval(
-                        f"set(figure({i + 1}), 'Renderer', 'painters'); "
-                        f"saveas(figure({i + 1}), '{svg_file}', 'svg')",
-                        nargout=0,
+                    # Create a working copy of compression config for this figure
+                    figure_compression_config = compression_config
+
+                    # Apply smart optimization if enabled
+                    if compression_config.smart_optimization:
+                        content_analysis = self._analyze_figure_content(i + 1)
+
+                        # Create optimized config based on content analysis
+                        from copy import deepcopy
+
+                        figure_compression_config = deepcopy(compression_config)
+                        figure_compression_config.quality = content_analysis[
+                            "recommended_quality"
+                        ]
+
+                        # Adjust DPI based on content complexity
+                        if content_analysis["has_image_data"]:
+                            # Higher DPI for images to preserve detail
+                            figure_compression_config.dpi = min(
+                                200, compression_config.dpi + 50
+                            )
+                        elif content_analysis["complexity_score"] <= 2:
+                            # Lower DPI for simple plots to save space
+                            figure_compression_config.dpi = max(
+                                100, compression_config.dpi - 25
+                            )
+
+                    # Optimize MATLAB print parameters based on compression settings
+                    print_args = [
+                        f"'{png_file}'",
+                        "'-dpng'",
+                        f"'-r{figure_compression_config.dpi}'",
+                    ]
+
+                    # Choose renderer based on optimization target
+                    if figure_compression_config.optimize_for == "size":
+                        # Use OpenGL renderer for smaller files (rasterized)
+                        print_args.append("'-opengl'")
+                    else:
+                        # Use painters renderer for better quality (vector-based)
+                        print_args.append("'-painters'")
+
+                    # Add compression-friendly settings
+                    if figure_compression_config.quality < 50:
+                        # For low quality, use loose bounds to reduce file size
+                        print_args.append("'-loose'")
+                    else:
+                        # For higher quality, use tight bounds
+                        print_args.append("'-tight'")
+
+                    # Remove unnecessary margins for smaller files
+                    print_args.append("'-fillpage'")
+
+                    # Set figure properties for optimal compression
+                    fig_optimization = (
+                        f"fig = figure({i + 1}); "
+                        f"set(fig, 'Color', 'white'); "  # White background compresses better
+                        f"set(fig, 'InvertHardcopy', 'off'); "  # Preserve background color
                     )
-                    with open(svg_file, "rb") as f:
-                        figure_data.append(
-                            FigureData(data=f.read(), format=FigureFormat.SVG)
+
+                    # Additional optimizations based on quality setting
+                    if figure_compression_config.quality < 70:
+                        # For lower quality, reduce anti-aliasing
+                        fig_optimization += "set(fig, 'GraphicsSmoothing', 'off'); "
+
+                    print_cmd = f"print(figure({i + 1}), {', '.join(print_args)})"
+
+                    # Apply optimizations and print
+                    self.eng.eval(fig_optimization, nargout=0)
+                    self.eng.eval(print_cmd, nargout=0)
+
+                    # Get original file size before compression
+                    original_size = png_file.stat().st_size
+
+                    if figure_compression_config.use_file_reference:
+                        # Apply compression and save to disk, return file path only
+                        compressed_data = self._compress_png(
+                            png_file, figure_compression_config
+                        )
+                        compressed_size = len(compressed_data)
+
+                        # Save compressed data to new file
+                        compressed_file = self.output_dir / f"figure_{i}_compressed.png"
+                        with open(compressed_file, "wb") as f:
+                            f.write(compressed_data)
+
+                        figure_data = FigureData(
+                            data=None,  # No binary data, use file path instead
+                            file_path=str(compressed_file),
+                            format=FigureFormat.PNG,
+                            compression_config=figure_compression_config,
+                            original_size=original_size,
+                            compressed_size=compressed_size,
+                        )
+                    else:
+                        # Return binary data as before
+                        compressed_data = self._compress_png(
+                            png_file, figure_compression_config
+                        )
+                        compressed_size = len(compressed_data)
+
+                        figure_data = FigureData(
+                            data=compressed_data,
+                            format=FigureFormat.PNG,
+                            compression_config=figure_compression_config,
+                            original_size=original_size,
+                            compressed_size=compressed_size,
                         )
 
-                    figures.extend(figure_data)
+                    figures.append(figure_data)
 
             return figures
         finally:
             # Always clean up, even if an error occurred
             await self.cleanup_figures()
 
-    async def get_workspace(self) -> Dict[str, Any]:
-        """Get current MATLAB workspace variables.
+    async def benchmark_compression(self, test_plots: bool = True) -> dict:
+        """Benchmark figure compression performance.
+
+        Args:
+            test_plots: Whether to generate test plots for benchmarking
 
         Returns:
-            Dictionary of variable names and their values
+            Dictionary containing benchmark results
+        """
+        results = {"timestamp": time.time(), "test_configurations": [], "summary": {}}
+
+        # Test configurations for benchmarking
+        test_configs = [
+            CompressionConfig(
+                quality=95, dpi=150, optimize_for="quality", smart_optimization=False
+            ),
+            CompressionConfig(
+                quality=75, dpi=150, optimize_for="size", smart_optimization=True
+            ),
+            CompressionConfig(
+                quality=50, dpi=100, optimize_for="size", smart_optimization=True
+            ),
+        ]
+
+        try:
+            if test_plots:
+                # Generate a test plot
+                test_script = """
+                x = linspace(0, 4*pi, 100);
+                y = sin(x) + 0.1 * cos(10*x);
+                figure;
+                plot(x, y, 'b-', 'LineWidth', 2);
+                title('Compression Test Plot');
+                xlabel('X'); ylabel('Y');
+                grid on;
+                """
+                await self.execute(test_script, capture_plots=False)
+
+            # Test each configuration
+            for i, config in enumerate(test_configs):
+                start_time = time.time()
+                figures = await self._capture_figures(config)
+                end_time = time.time()
+
+                if figures:
+                    fig = figures[0]
+                    processing_time = end_time - start_time
+
+                    original_size = fig.original_size or 0
+                    compressed_size = fig.compressed_size or 0
+                    compression_ratio = (
+                        (1 - compressed_size / original_size) * 100
+                        if original_size > 0
+                        else 0
+                    )
+
+                    config_result = {
+                        "config_name": f"Config_{i + 1}",
+                        "quality": config.quality,
+                        "dpi": config.dpi,
+                        "optimize_for": config.optimize_for,
+                        "smart_optimization": config.smart_optimization,
+                        "original_size_bytes": original_size,
+                        "compressed_size_bytes": compressed_size,
+                        "compression_ratio_percent": compression_ratio,
+                        "processing_time_seconds": processing_time,
+                    }
+
+                    results["test_configurations"].append(config_result)
+
+            # Calculate summary statistics
+            if results["test_configurations"]:
+                avg_compression = sum(
+                    r["compression_ratio_percent"]
+                    for r in results["test_configurations"]
+                ) / len(results["test_configurations"])
+                max_compression = max(
+                    r["compression_ratio_percent"]
+                    for r in results["test_configurations"]
+                )
+                avg_processing_time = sum(
+                    r["processing_time_seconds"] for r in results["test_configurations"]
+                ) / len(results["test_configurations"])
+
+                results["summary"] = {
+                    "average_compression_ratio": avg_compression,
+                    "maximum_compression_ratio": max_compression,
+                    "average_processing_time": avg_processing_time,
+                    "configurations_tested": len(results["test_configurations"]),
+                }
+
+        except Exception as e:
+            results["error"] = str(e)
+
+        finally:
+            await self.cleanup_figures()
+
+        return results
+
+    async def get_workspace(self) -> Dict[str, Any]:
+        """Get current MATLAB workspace variables with smart summarization.
+
+        For large arrays, returns metadata and preview instead of full data
+        to dramatically reduce token usage.
+
+        Returns:
+            Dictionary of variable names and their optimized representations
         """
         workspace = {}
         var_names = self.eng.eval("who", nargout=1)
 
+        # Use configurable thresholds
+        SMALL_THRESHOLD = self.workspace_config.small_threshold
+        MEDIUM_THRESHOLD = self.workspace_config.medium_threshold
+        PREVIEW_ELEMENTS = self.workspace_config.preview_elements
+
         for var in var_names:
             try:
                 value = self.eng.workspace[var]
+
                 if isinstance(value, matlab.double):
                     try:
-                        # Get the size of the array
+                        # Get array dimensions and total elements
                         size = value.size
-                        if len(size) == 2 and (size[0] == 1 or size[1] == 1):
-                            # 1D array
-                            workspace[var] = value._data.tolist()
+                        total_elements = 1
+                        for dim in size:
+                            total_elements *= dim
+
+                        # Smart classification based on size
+                        if total_elements <= SMALL_THRESHOLD:
+                            # Small arrays: return full data (current behavior)
+                            if len(size) == 2 and (size[0] == 1 or size[1] == 1):
+                                workspace[var] = value._data.tolist()
+                            else:
+                                workspace[var] = [row.tolist() for row in value]
+
+                        elif total_elements <= MEDIUM_THRESHOLD:
+                            # Medium arrays: return summary with statistics
+                            workspace[var] = {
+                                "_mcp_type": "medium_array",
+                                "dimensions": list(size),
+                                "total_elements": total_elements,
+                                "data_type": "double",
+                                "statistics": {
+                                    "min": float(
+                                        self.eng.eval(f"min({var}(:))", nargout=1)
+                                    ),
+                                    "max": float(
+                                        self.eng.eval(f"max({var}(:))", nargout=1)
+                                    ),
+                                    "mean": float(
+                                        self.eng.eval(f"mean({var}(:))", nargout=1)
+                                    ),
+                                },
+                                "sample_data": [
+                                    float(x)
+                                    for x in self.eng.eval(
+                                        f"{var}(1:min({PREVIEW_ELEMENTS + 2},numel({var})))",
+                                        nargout=1,
+                                    )._data
+                                ],
+                                "memory_usage_mb": round(
+                                    total_elements * 8 / (1024 * 1024), 2
+                                ),
+                            }
+
                         else:
-                            # 2D array
-                            workspace[var] = [row.tolist() for row in value]
-                    except Exception:
-                        workspace[var] = str(value)
+                            # Large arrays: return metadata and minimal preview only
+                            workspace[var] = {
+                                "_mcp_type": "large_array",
+                                "dimensions": list(size),
+                                "total_elements": total_elements,
+                                "data_type": "double",
+                                "statistics": {
+                                    "min": float(
+                                        self.eng.eval(f"min({var}(:))", nargout=1)
+                                    ),
+                                    "max": float(
+                                        self.eng.eval(f"max({var}(:))", nargout=1)
+                                    ),
+                                    "mean": float(
+                                        self.eng.eval(f"mean({var}(:))", nargout=1)
+                                    ),
+                                },
+                                "sample_data": [
+                                    float(x)
+                                    for x in self.eng.eval(
+                                        f"{var}(1:min({PREVIEW_ELEMENTS},numel({var})))",
+                                        nargout=1,
+                                    )._data
+                                ],
+                                "memory_usage_mb": round(
+                                    total_elements * 8 / (1024 * 1024), 2
+                                ),
+                                "compression_note": f"Array too large ({total_elements:,} elements) - showing summary only",
+                            }
+
+                    except Exception as e:
+                        workspace[var] = f"<Error processing array: {str(e)}>"
+
                 else:
+                    # Handle non-double types - use original behavior for now
                     try:
                         workspace[var] = value._data.tolist()
                     except Exception:
-                        workspace[var] = str(value)
+                        str_val = str(value)
+                        max_len = self.workspace_config.max_string_length
+                        workspace[var] = (
+                            str_val[:max_len] + "..."
+                            if len(str_val) > max_len
+                            else str_val
+                        )
+
             except Exception as e:
                 workspace[var] = f"<Error reading variable: {str(e)}>"
 
         return workspace
 
     async def get_memory_status(self) -> MemoryStatus:
-        """Get current workspace memory status.
-
-        Returns:
-            MemoryStatus containing memory usage information
-        """
-        if self.eng is None:
-            return MemoryStatus(
-                total_size_mb=0.0,
-                variable_count=0,
-                largest_variable=None,
-                largest_variable_size_mb=0.0,
-                memory_limit_mb=self.config.memory_limit_mb,
-                near_limit=False,
-            )
-
+        """Get current workspace memory status."""
         try:
-            # Get workspace information using MATLAB's whos command
+            # Get workspace info using whos
             workspace_info = self.eng.eval("whos", nargout=1)
 
+            if not workspace_info:
+                return MemoryStatus(
+                    total_size_mb=0.0,
+                    variable_count=0,
+                    largest_variable=None,
+                    largest_variable_size_mb=0.0,
+                    memory_limit_mb=self.config.memory_limit_mb,
+                    near_limit=False,
+                )
+
             total_bytes = 0
-            variable_count = 0
-            largest_var_name = None
-            largest_var_size = 0
+            variable_info = []
 
-            if workspace_info:
-                for var_info in workspace_info:
-                    var_size = var_info["bytes"]
-                    total_bytes += var_size
-                    variable_count += 1
+            for var_info in workspace_info:
+                var_bytes = var_info.get("bytes", 0)
+                total_bytes += var_bytes
+                variable_info.append(
+                    {
+                        "name": var_info.get("name", "Unknown"),
+                        "size_mb": var_bytes / (1024 * 1024),
+                        "bytes": var_bytes,
+                    }
+                )
 
-                    if var_size > largest_var_size:
-                        largest_var_size = var_size
-                        largest_var_name = var_info["name"]
+            # Sort by size to find largest variable
+            variable_info.sort(key=lambda x: x["bytes"], reverse=True)
+
+            largest_variable = variable_info[0]["name"] if variable_info else None
+            largest_variable_size_mb = (
+                variable_info[0]["size_mb"] if variable_info else 0.0
+            )
 
             total_size_mb = total_bytes / (1024 * 1024)
-            largest_size_mb = largest_var_size / (1024 * 1024)
 
-            # Check if near memory limit (80% threshold)
+            # Check if near memory limit
             near_limit = False
             if self.config.memory_limit_mb:
                 near_limit = total_size_mb > (self.config.memory_limit_mb * 0.8)
 
             return MemoryStatus(
                 total_size_mb=total_size_mb,
-                variable_count=variable_count,
-                largest_variable=largest_var_name,
-                largest_variable_size_mb=largest_size_mb,
+                variable_count=len(variable_info),
+                largest_variable=largest_variable,
+                largest_variable_size_mb=largest_variable_size_mb,
                 memory_limit_mb=self.config.memory_limit_mb,
                 near_limit=near_limit,
             )
@@ -646,43 +975,37 @@ class MatlabEngine:
             )
 
     async def check_memory_limit(self) -> bool:
-        """Check if workspace memory usage exceeds configured limit.
-
-        Returns:
-            True if memory limit is exceeded, False otherwise
-        """
+        """Check if memory usage exceeds configured limit."""
         if not self.config.memory_limit_mb:
             return False
 
         memory_status = await self.get_memory_status()
         return memory_status.total_size_mb > self.config.memory_limit_mb
 
-    async def clear_large_variables(self, threshold_mb: float = 100.0) -> List[str]:
-        """Clear variables larger than specified threshold.
-
-        Args:
-            threshold_mb: Size threshold in MB
-
-        Returns:
-            List of cleared variable names
-        """
-        if self.eng is None:
-            return []
-
+    async def clear_large_variables(self, threshold_mb: float = 50.0) -> List[str]:
+        """Clear variables larger than the specified threshold."""
         try:
-            cleared_vars = []
             workspace_info = self.eng.eval("whos", nargout=1)
+            if not workspace_info:
+                return []
 
-            if workspace_info:
-                for var_info in workspace_info:
-                    var_size_mb = var_info["bytes"] / (1024 * 1024)
-                    if var_size_mb > threshold_mb:
-                        var_name = var_info["name"]
+            cleared_vars = []
+            for var_info in workspace_info:
+                var_name = var_info.get("name", "")
+                var_bytes = var_info.get("bytes", 0)
+                var_size_mb = var_bytes / (1024 * 1024)
+
+                if var_size_mb > threshold_mb:
+                    try:
                         self.eng.eval(f"clear {var_name}", nargout=0)
                         cleared_vars.append(var_name)
                         print(
-                            f"Cleared variable '{var_name}' ({var_size_mb:.1f} MB)",
+                            f"Cleared large variable: {var_name} ({var_size_mb:.1f} MB)",
                             file=sys.stderr,
+                        )
+                    except Exception as e:
+                        print(
+                            f"Error clearing variable {var_name}: {e}", file=sys.stderr
                         )
 
             return cleared_vars
@@ -692,11 +1015,7 @@ class MatlabEngine:
             return []
 
     async def get_connection_status(self) -> ConnectionStatus:
-        """Get current connection status information.
-
-        Returns:
-            ConnectionStatus containing connection information
-        """
+        """Get current connection status information."""
         is_connected = self.eng is not None
         uptime = time.time() - self.connection_start_time
 
@@ -706,367 +1025,6 @@ class MatlabEngine:
             uptime_seconds=uptime,
             last_activity=self.last_activity,
         )
-
-    async def cleanup_idle_connections(self):
-        """Clean up idle connections in the connection pool."""
-        if hasattr(self, "connection_pool"):
-            self.connection_pool.cleanup_idle_connections()
-
-    def _create_enhanced_error(
-        self, error: Exception, script: str, is_file: bool = False
-    ) -> Optional[EnhancedError]:
-        """Create enhanced error information with context.
-
-        Args:
-            error: The caught exception
-            script: The executed script or file path
-            is_file: Whether script is a file path
-
-        Returns:
-            EnhancedError with context information, None if enhancement not possible
-        """
-        if not self.config.enable_enhanced_errors:
-            return None
-
-        try:
-            error_type = (
-                "MATLAB"
-                if isinstance(error, matlab.engine.MatlabExecutionError)
-                else "Python"
-            )
-            message = str(error)
-
-            # Try to extract line number from MATLAB error
-            line_number = None
-            if isinstance(error, matlab.engine.MatlabExecutionError):
-                # Look for line number patterns in MATLAB error messages
-                import re
-
-                line_match = re.search(r"line (\d+)", message, re.IGNORECASE)
-                if line_match:
-                    line_number = int(line_match.group(1))
-
-            # Get context lines if we have a script and line number
-            context_lines = []
-            if line_number and is_file and Path(script).exists():
-                try:
-                    with open(script, "r") as f:
-                        lines = f.readlines()
-
-                    # Get 2 lines before and after error line
-                    start_line = max(
-                        0, line_number - 3
-                    )  # -3 because line_number is 1-based
-                    end_line = min(len(lines), line_number + 2)
-
-                    for i in range(start_line, end_line):
-                        prefix = ">>> " if i + 1 == line_number else "    "
-                        context_lines.append(f"{prefix}{i + 1:3d}: {lines[i].rstrip()}")
-
-                except Exception:
-                    context_lines = ["<Could not read script file>"]
-
-            elif line_number and not is_file:
-                # For direct script execution, show the problematic line
-                try:
-                    lines = script.split("\n")
-                    if 0 < line_number <= len(lines):
-                        start_line = max(0, line_number - 3)
-                        end_line = min(len(lines), line_number + 2)
-
-                        for i in range(start_line, end_line):
-                            prefix = ">>> " if i + 1 == line_number else "    "
-                            context_lines.append(
-                                f"{prefix}{i + 1:3d}: {lines[i].rstrip()}"
-                            )
-                except Exception:
-                    context_lines = ["<Could not parse script>"]
-
-            # Get stack trace if available
-            stack_trace = None
-            if hasattr(error, "__traceback__") and error.__traceback__:
-                import traceback
-
-                stack_trace = "".join(
-                    traceback.format_exception(type(error), error, error.__traceback__)
-                )
-
-            return EnhancedError(
-                error_type=error_type,
-                message=message,
-                line_number=line_number,
-                context_lines=context_lines,
-                stack_trace=stack_trace,
-            )
-
-        except Exception as e:
-            print(f"Error creating enhanced error info: {e}", file=sys.stderr)
-            return None
-
-    def _check_file_changed(self, file_path: str) -> bool:
-        """Check if a file has changed since last check.
-
-        Args:
-            file_path: Path to file to check
-
-        Returns:
-            True if file has changed, False otherwise
-        """
-        if not self.config.enable_hot_reload:
-            return False
-
-        try:
-            path = Path(file_path)
-            if not path.exists():
-                return False
-
-            current_mtime = path.stat().st_mtime
-            last_mtime = self.watched_files.get(file_path, 0)
-
-            if current_mtime > last_mtime:
-                self.watched_files[file_path] = current_mtime
-                return True
-
-            return False
-
-        except Exception as e:
-            print(f"Error checking file change for {file_path}: {e}", file=sys.stderr)
-            return False
-
-    def _reload_file_if_changed(self, file_path: str) -> bool:
-        """Reload file content if it has changed.
-
-        Args:
-            file_path: Path to file to check and reload
-
-        Returns:
-            True if file was reloaded, False otherwise
-        """
-        if not self.config.enable_hot_reload:
-            return False
-
-        try:
-            if self._check_file_changed(file_path):
-                # Clear cached content to force reload
-                self.file_cache.pop(file_path, None)
-                print(f"Hot reload: File changed - {file_path}", file=sys.stderr)
-                return True
-            return False
-
-        except Exception as e:
-            print(f"Error during hot reload of {file_path}: {e}", file=sys.stderr)
-            return False
-
-    async def watch_file(self, file_path: str) -> None:
-        """Start watching a file for changes.
-
-        Args:
-            file_path: Path to file to watch
-        """
-        if not self.config.enable_hot_reload:
-            return
-
-        try:
-            path = Path(file_path)
-            if path.exists():
-                self.watched_files[file_path] = path.stat().st_mtime
-                print(f"Now watching file for changes: {file_path}", file=sys.stderr)
-        except Exception as e:
-            print(f"Error starting file watch for {file_path}: {e}", file=sys.stderr)
-
-    async def unwatch_file(self, file_path: str) -> None:
-        """Stop watching a file for changes.
-
-        Args:
-            file_path: Path to file to stop watching
-        """
-        self.watched_files.pop(file_path, None)
-        self.file_cache.pop(file_path, None)
-        print(f"Stopped watching file: {file_path}", file=sys.stderr)
-
-    async def get_watched_files(self) -> List[str]:
-        """Get list of currently watched files.
-
-        Returns:
-            List of file paths being watched
-        """
-        return list(self.watched_files.keys())
-
-    async def check_all_watched_files(self) -> List[str]:
-        """Check all watched files for changes.
-
-        Returns:
-            List of files that have changed
-        """
-        changed_files = []
-        for file_path in list(self.watched_files.keys()):
-            if self._reload_file_if_changed(file_path):
-                changed_files.append(file_path)
-        return changed_files
-
-    async def inspect_variable(self, var_name: str) -> Dict[str, Any]:
-        """Get detailed information about a specific variable.
-
-        Args:
-            var_name: Name of variable to inspect
-
-        Returns:
-            Dictionary containing detailed variable information
-        """
-        if self.eng is None:
-            return {"error": "MATLAB engine not initialized"}
-
-        try:
-            # Check if variable exists
-            exists = self.eng.evalin("base", f'exist("{var_name}", "var")', nargout=1)
-            if not exists:
-                return {"error": f"Variable '{var_name}' does not exist"}
-
-            # Get basic information using whos
-            var_info = self.eng.evalin("base", f'whos("{var_name}")', nargout=1)
-            if not var_info:
-                return {"error": f"Could not get information for variable '{var_name}'"}
-
-            info = var_info[0]  # whos returns a cell array
-
-            # Get the variable value
-            try:
-                value = self.eng.workspace[var_name]
-
-                # Convert MATLAB types to Python-readable formats
-                if isinstance(value, matlab.double):
-                    size = value.size
-                    if len(size) == 2 and (size[0] == 1 or size[1] == 1):
-                        # 1D array
-                        converted_value = value._data.tolist()
-                    else:
-                        # 2D array - show preview if large
-                        if max(size) > 10:
-                            converted_value = f"<{size[0]}x{size[1]} double array - too large to display>"
-                        else:
-                            converted_value = [row.tolist() for row in value]
-                else:
-                    converted_value = str(value)[:200]  # Truncate long strings
-
-            except Exception as e:
-                converted_value = f"<Could not convert value: {e}>"
-
-            return {
-                "name": info.get("name", var_name),
-                "size": info.get("size", "Unknown"),
-                "bytes": info.get("bytes", 0),
-                "class": info.get("class", "Unknown"),
-                "attributes": info.get("attributes", []),
-                "value": converted_value,
-                "size_mb": info.get("bytes", 0) / (1024 * 1024)
-                if info.get("bytes")
-                else 0,
-            }
-
-        except Exception as e:
-            return {"error": f"Error inspecting variable '{var_name}': {e}"}
-
-    async def get_variable_summary(self) -> Dict[str, Any]:
-        """Get summary of all workspace variables.
-
-        Returns:
-            Dictionary containing workspace summary
-        """
-        if self.eng is None:
-            return {"error": "MATLAB engine not initialized"}
-
-        try:
-            # Get workspace info using whos
-            workspace_info = self.eng.eval("whos", nargout=1)
-
-            if not workspace_info:
-                return {"total_variables": 0, "total_memory_mb": 0.0, "variables": []}
-
-            total_bytes = 0
-            variable_summaries = []
-
-            for var_info in workspace_info:
-                var_bytes = var_info.get("bytes", 0)
-                total_bytes += var_bytes
-
-                variable_summaries.append(
-                    {
-                        "name": var_info.get("name", "Unknown"),
-                        "size": var_info.get("size", "Unknown"),
-                        "class": var_info.get("class", "Unknown"),
-                        "size_mb": var_bytes / (1024 * 1024),
-                        "attributes": var_info.get("attributes", []),
-                    }
-                )
-
-            # Sort by memory usage (largest first)
-            variable_summaries.sort(key=lambda x: x["size_mb"], reverse=True)
-
-            return {
-                "total_variables": len(variable_summaries),
-                "total_memory_mb": total_bytes / (1024 * 1024),
-                "variables": variable_summaries,
-            }
-
-        except Exception as e:
-            return {"error": f"Error getting variable summary: {e}"}
-
-    async def find_large_variables(
-        self, threshold_mb: float = 10.0
-    ) -> List[Dict[str, Any]]:
-        """Find variables larger than specified threshold.
-
-        Args:
-            threshold_mb: Size threshold in MB
-
-        Returns:
-            List of large variables with their information
-        """
-        summary = await self.get_variable_summary()
-
-        if "error" in summary:
-            return []
-
-        large_vars = [
-            var for var in summary["variables"] if var["size_mb"] > threshold_mb
-        ]
-
-        return large_vars
-
-    async def search_variables(self, pattern: str) -> List[Dict[str, Any]]:
-        """Search for variables matching a pattern.
-
-        Args:
-            pattern: Search pattern (supports wildcards)
-
-        Returns:
-            List of matching variables
-        """
-        if self.eng is None:
-            return []
-
-        try:
-            import re
-
-            # Convert shell-style wildcards to regex
-            regex_pattern = pattern.replace("*", ".*").replace("?", ".")
-            compiled_pattern = re.compile(regex_pattern, re.IGNORECASE)
-
-            summary = await self.get_variable_summary()
-            if "error" in summary:
-                return []
-
-            matching_vars = [
-                var
-                for var in summary["variables"]
-                if compiled_pattern.match(var["name"])
-            ]
-
-            return matching_vars
-
-        except Exception as e:
-            print(f"Error searching variables: {e}", file=sys.stderr)
-            return []
 
     async def execute_section(
         self,
@@ -1111,21 +1069,9 @@ class MatlabEngine:
             try:
                 # Clean up figures first
                 self.eng.eval("close all", nargout=0)
+                # Then quit the engine
+                self.eng.quit()
             except Exception as e:
-                print(f"Error cleaning up figures: {e}", file=sys.stderr)
-
-            # Don't quit the engine if using connection pool - let pool manage it
-            if hasattr(self, "connection_pool"):
-                print(
-                    f"Connection returned to pool: {self.connection_id}",
-                    file=sys.stderr,
-                )
+                print(f"Error during engine cleanup: {e}", file=sys.stderr)
+            finally:
                 self.eng = None
-            else:
-                # Traditional cleanup
-                try:
-                    self.eng.quit()
-                except Exception as e:
-                    print(f"Error during engine cleanup: {e}", file=sys.stderr)
-                finally:
-                    self.eng = None

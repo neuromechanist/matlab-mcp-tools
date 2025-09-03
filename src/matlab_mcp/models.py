@@ -14,11 +14,50 @@ class FigureFormat(str, Enum):
     SVG = "svg"
 
 
-class FigureData(BaseModel):
-    """Model for figure data."""
+class CompressionConfig(BaseModel):
+    """Configuration for figure compression."""
 
-    data: bytes = Field(description="Raw figure data")
-    format: FigureFormat = Field(description="Figure format (png or svg)")
+    quality: int = Field(
+        default=75,
+        ge=1,
+        le=100,
+        description="Compression quality (1-100, higher is better quality)",
+    )
+    dpi: int = Field(
+        default=150, ge=50, le=600, description="Resolution in DPI (dots per inch)"
+    )
+    optimize_for: str = Field(
+        default="size", description="Optimization target: 'size' or 'quality'"
+    )
+    use_file_reference: bool = Field(
+        default=False,
+        description="Return file path instead of binary data to reduce bandwidth",
+    )
+    smart_optimization: bool = Field(
+        default=True,
+        description="Analyze plot content to automatically optimize compression settings",
+    )
+
+
+class FigureData(BaseModel):
+    """Model for figure data with compression support."""
+
+    data: Optional[bytes] = Field(
+        default=None, description="Raw figure data (None if using file_path)"
+    )
+    file_path: Optional[str] = Field(
+        default=None, description="Path to figure file (alternative to data)"
+    )
+    format: FigureFormat = Field(description="Figure format")
+    compression_config: Optional[CompressionConfig] = Field(
+        default=None, description="Compression settings used"
+    )
+    original_size: Optional[int] = Field(
+        default=None, description="Original file size in bytes"
+    )
+    compressed_size: Optional[int] = Field(
+        default=None, description="Compressed file size in bytes"
+    )
 
 
 class ScriptExecution(BaseModel):
@@ -33,6 +72,9 @@ class ScriptExecution(BaseModel):
     )
     capture_plots: bool = Field(
         default=True, description="Whether to capture and return generated plots"
+    )
+    compression_config: Optional[CompressionConfig] = Field(
+        default=None, description="Figure compression settings"
     )
 
 
