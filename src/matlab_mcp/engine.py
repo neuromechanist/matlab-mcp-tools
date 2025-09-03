@@ -149,6 +149,10 @@ class MatlabEngine:
         # Connection pool for improved performance
         self.connection_pool = MatlabConnectionPool()
 
+        # Hot reloading for script development
+        self.watched_files = {}  # file_path -> last_modified_time
+        self.file_cache = {}  # file_path -> cached_content
+
     async def initialize(self) -> None:
         """Initialize MATLAB engine if not already running."""
         if self.eng is not None:
@@ -372,6 +376,14 @@ class MatlabEngine:
                 script_path = Path(script)
                 if not script_path.exists():
                     raise FileNotFoundError(f"Script not found: {script}")
+
+                # Check for hot reload if enabled
+                if self.config.enable_hot_reload:
+                    await self.watch_file(script)
+                    if self._reload_file_if_changed(script):
+                        if ctx:
+                            ctx.info(f"File changed, reloading: {script_path}")
+
                 if ctx:
                     ctx.info(f"Executing MATLAB script: {script_path}")
                 output = self.eng.run(str(script_path), nargout=0)
@@ -790,6 +802,107 @@ class MatlabEngine:
         except Exception as e:
             print(f"Error creating enhanced error info: {e}", file=sys.stderr)
             return None
+
+    def _check_file_changed(self, file_path: str) -> bool:
+        """Check if a file has changed since last check.
+
+        Args:
+            file_path: Path to file to check
+
+        Returns:
+            True if file has changed, False otherwise
+        """
+        if not self.config.enable_hot_reload:
+            return False
+
+        try:
+            path = Path(file_path)
+            if not path.exists():
+                return False
+
+            current_mtime = path.stat().st_mtime
+            last_mtime = self.watched_files.get(file_path, 0)
+
+            if current_mtime > last_mtime:
+                self.watched_files[file_path] = current_mtime
+                return True
+
+            return False
+
+        except Exception as e:
+            print(f"Error checking file change for {file_path}: {e}", file=sys.stderr)
+            return False
+
+    def _reload_file_if_changed(self, file_path: str) -> bool:
+        """Reload file content if it has changed.
+
+        Args:
+            file_path: Path to file to check and reload
+
+        Returns:
+            True if file was reloaded, False otherwise
+        """
+        if not self.config.enable_hot_reload:
+            return False
+
+        try:
+            if self._check_file_changed(file_path):
+                # Clear cached content to force reload
+                self.file_cache.pop(file_path, None)
+                print(f"Hot reload: File changed - {file_path}", file=sys.stderr)
+                return True
+            return False
+
+        except Exception as e:
+            print(f"Error during hot reload of {file_path}: {e}", file=sys.stderr)
+            return False
+
+    async def watch_file(self, file_path: str) -> None:
+        """Start watching a file for changes.
+
+        Args:
+            file_path: Path to file to watch
+        """
+        if not self.config.enable_hot_reload:
+            return
+
+        try:
+            path = Path(file_path)
+            if path.exists():
+                self.watched_files[file_path] = path.stat().st_mtime
+                print(f"Now watching file for changes: {file_path}", file=sys.stderr)
+        except Exception as e:
+            print(f"Error starting file watch for {file_path}: {e}", file=sys.stderr)
+
+    async def unwatch_file(self, file_path: str) -> None:
+        """Stop watching a file for changes.
+
+        Args:
+            file_path: Path to file to stop watching
+        """
+        self.watched_files.pop(file_path, None)
+        self.file_cache.pop(file_path, None)
+        print(f"Stopped watching file: {file_path}", file=sys.stderr)
+
+    async def get_watched_files(self) -> List[str]:
+        """Get list of currently watched files.
+
+        Returns:
+            List of file paths being watched
+        """
+        return list(self.watched_files.keys())
+
+    async def check_all_watched_files(self) -> List[str]:
+        """Check all watched files for changes.
+
+        Returns:
+            List of files that have changed
+        """
+        changed_files = []
+        for file_path in list(self.watched_files.keys()):
+            if self._reload_file_if_changed(file_path):
+                changed_files.append(file_path)
+        return changed_files
 
     async def execute_section(
         self,
