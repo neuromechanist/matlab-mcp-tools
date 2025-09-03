@@ -904,6 +904,170 @@ class MatlabEngine:
                 changed_files.append(file_path)
         return changed_files
 
+    async def inspect_variable(self, var_name: str) -> Dict[str, Any]:
+        """Get detailed information about a specific variable.
+
+        Args:
+            var_name: Name of variable to inspect
+
+        Returns:
+            Dictionary containing detailed variable information
+        """
+        if self.eng is None:
+            return {"error": "MATLAB engine not initialized"}
+
+        try:
+            # Check if variable exists
+            exists = self.eng.evalin("base", f'exist("{var_name}", "var")', nargout=1)
+            if not exists:
+                return {"error": f"Variable '{var_name}' does not exist"}
+
+            # Get basic information using whos
+            var_info = self.eng.evalin("base", f'whos("{var_name}")', nargout=1)
+            if not var_info:
+                return {"error": f"Could not get information for variable '{var_name}'"}
+
+            info = var_info[0]  # whos returns a cell array
+
+            # Get the variable value
+            try:
+                value = self.eng.workspace[var_name]
+
+                # Convert MATLAB types to Python-readable formats
+                if isinstance(value, matlab.double):
+                    size = value.size
+                    if len(size) == 2 and (size[0] == 1 or size[1] == 1):
+                        # 1D array
+                        converted_value = value._data.tolist()
+                    else:
+                        # 2D array - show preview if large
+                        if max(size) > 10:
+                            converted_value = f"<{size[0]}x{size[1]} double array - too large to display>"
+                        else:
+                            converted_value = [row.tolist() for row in value]
+                else:
+                    converted_value = str(value)[:200]  # Truncate long strings
+
+            except Exception as e:
+                converted_value = f"<Could not convert value: {e}>"
+
+            return {
+                "name": info.get("name", var_name),
+                "size": info.get("size", "Unknown"),
+                "bytes": info.get("bytes", 0),
+                "class": info.get("class", "Unknown"),
+                "attributes": info.get("attributes", []),
+                "value": converted_value,
+                "size_mb": info.get("bytes", 0) / (1024 * 1024)
+                if info.get("bytes")
+                else 0,
+            }
+
+        except Exception as e:
+            return {"error": f"Error inspecting variable '{var_name}': {e}"}
+
+    async def get_variable_summary(self) -> Dict[str, Any]:
+        """Get summary of all workspace variables.
+
+        Returns:
+            Dictionary containing workspace summary
+        """
+        if self.eng is None:
+            return {"error": "MATLAB engine not initialized"}
+
+        try:
+            # Get workspace info using whos
+            workspace_info = self.eng.eval("whos", nargout=1)
+
+            if not workspace_info:
+                return {"total_variables": 0, "total_memory_mb": 0.0, "variables": []}
+
+            total_bytes = 0
+            variable_summaries = []
+
+            for var_info in workspace_info:
+                var_bytes = var_info.get("bytes", 0)
+                total_bytes += var_bytes
+
+                variable_summaries.append(
+                    {
+                        "name": var_info.get("name", "Unknown"),
+                        "size": var_info.get("size", "Unknown"),
+                        "class": var_info.get("class", "Unknown"),
+                        "size_mb": var_bytes / (1024 * 1024),
+                        "attributes": var_info.get("attributes", []),
+                    }
+                )
+
+            # Sort by memory usage (largest first)
+            variable_summaries.sort(key=lambda x: x["size_mb"], reverse=True)
+
+            return {
+                "total_variables": len(variable_summaries),
+                "total_memory_mb": total_bytes / (1024 * 1024),
+                "variables": variable_summaries,
+            }
+
+        except Exception as e:
+            return {"error": f"Error getting variable summary: {e}"}
+
+    async def find_large_variables(
+        self, threshold_mb: float = 10.0
+    ) -> List[Dict[str, Any]]:
+        """Find variables larger than specified threshold.
+
+        Args:
+            threshold_mb: Size threshold in MB
+
+        Returns:
+            List of large variables with their information
+        """
+        summary = await self.get_variable_summary()
+
+        if "error" in summary:
+            return []
+
+        large_vars = [
+            var for var in summary["variables"] if var["size_mb"] > threshold_mb
+        ]
+
+        return large_vars
+
+    async def search_variables(self, pattern: str) -> List[Dict[str, Any]]:
+        """Search for variables matching a pattern.
+
+        Args:
+            pattern: Search pattern (supports wildcards)
+
+        Returns:
+            List of matching variables
+        """
+        if self.eng is None:
+            return []
+
+        try:
+            import re
+
+            # Convert shell-style wildcards to regex
+            regex_pattern = pattern.replace("*", ".*").replace("?", ".")
+            compiled_pattern = re.compile(regex_pattern, re.IGNORECASE)
+
+            summary = await self.get_variable_summary()
+            if "error" in summary:
+                return []
+
+            matching_vars = [
+                var
+                for var in summary["variables"]
+                if compiled_pattern.match(var["name"])
+            ]
+
+            return matching_vars
+
+        except Exception as e:
+            print(f"Error searching variables: {e}", file=sys.stderr)
+            return []
+
     async def execute_section(
         self,
         file_path: str,
