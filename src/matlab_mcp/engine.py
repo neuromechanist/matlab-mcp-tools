@@ -16,10 +16,28 @@ from .models import CompressionConfig, ExecutionResult, FigureData, FigureFormat
 from .utils.section_parser import extract_section
 
 
+class WorkspaceConfig:
+    """Configuration for workspace data transfer optimization."""
+
+    def __init__(
+        self,
+        small_threshold: int = 100,
+        medium_threshold: int = 10000,
+        preview_elements: int = 3,
+        max_string_length: int = 200,
+    ):
+        self.small_threshold = small_threshold  # Elements: return full data
+        self.medium_threshold = medium_threshold  # Elements: return sample + stats
+        self.preview_elements = preview_elements  # Number of elements in preview
+        self.max_string_length = (
+            max_string_length  # Max string length before truncation
+        )
+
+
 class MatlabEngine:
     """Wrapper for MATLAB engine with enhanced functionality."""
 
-    def __init__(self):
+    def __init__(self, workspace_config: Optional[WorkspaceConfig] = None):
         """Initialize MATLAB engine wrapper."""
         self.eng = None
         # Use .mcp directory in home for all outputs
@@ -28,6 +46,9 @@ class MatlabEngine:
         self.output_dir.parent.mkdir(parents=True, exist_ok=True)
         self.output_dir.mkdir(exist_ok=True)
         self.matlab_path = os.getenv("MATLAB_PATH", "/Applications/MATLAB_R2024b.app")
+
+        # Workspace optimization configuration
+        self.workspace_config = workspace_config or WorkspaceConfig()
 
     async def initialize(self) -> None:
         """Initialize MATLAB engine if not already running."""
@@ -641,34 +662,119 @@ class MatlabEngine:
         return results
 
     async def get_workspace(self) -> Dict[str, Any]:
-        """Get current MATLAB workspace variables.
+        """Get current MATLAB workspace variables with smart summarization.
+
+        For large arrays, returns metadata and preview instead of full data
+        to dramatically reduce token usage.
 
         Returns:
-            Dictionary of variable names and their values
+            Dictionary of variable names and their optimized representations
         """
         workspace = {}
         var_names = self.eng.eval("who", nargout=1)
 
+        # Use configurable thresholds
+        SMALL_THRESHOLD = self.workspace_config.small_threshold
+        MEDIUM_THRESHOLD = self.workspace_config.medium_threshold
+        PREVIEW_ELEMENTS = self.workspace_config.preview_elements
+
         for var in var_names:
             try:
                 value = self.eng.workspace[var]
+
                 if isinstance(value, matlab.double):
                     try:
-                        # Get the size of the array
+                        # Get array dimensions and total elements
                         size = value.size
-                        if len(size) == 2 and (size[0] == 1 or size[1] == 1):
-                            # 1D array
-                            workspace[var] = value._data.tolist()
+                        total_elements = 1
+                        for dim in size:
+                            total_elements *= dim
+
+                        # Smart classification based on size
+                        if total_elements <= SMALL_THRESHOLD:
+                            # Small arrays: return full data (current behavior)
+                            if len(size) == 2 and (size[0] == 1 or size[1] == 1):
+                                workspace[var] = value._data.tolist()
+                            else:
+                                workspace[var] = [row.tolist() for row in value]
+
+                        elif total_elements <= MEDIUM_THRESHOLD:
+                            # Medium arrays: return summary with statistics
+                            workspace[var] = {
+                                "_mcp_type": "medium_array",
+                                "dimensions": list(size),
+                                "total_elements": total_elements,
+                                "data_type": "double",
+                                "statistics": {
+                                    "min": float(
+                                        self.eng.eval(f"min({var}(:))", nargout=1)
+                                    ),
+                                    "max": float(
+                                        self.eng.eval(f"max({var}(:))", nargout=1)
+                                    ),
+                                    "mean": float(
+                                        self.eng.eval(f"mean({var}(:))", nargout=1)
+                                    ),
+                                },
+                                "sample_data": [
+                                    float(x)
+                                    for x in self.eng.eval(
+                                        f"{var}(1:min({PREVIEW_ELEMENTS + 2},numel({var})))",
+                                        nargout=1,
+                                    )._data
+                                ],
+                                "memory_usage_mb": round(
+                                    total_elements * 8 / (1024 * 1024), 2
+                                ),
+                            }
+
                         else:
-                            # 2D array
-                            workspace[var] = [row.tolist() for row in value]
-                    except Exception:
-                        workspace[var] = str(value)
+                            # Large arrays: return metadata and minimal preview only
+                            workspace[var] = {
+                                "_mcp_type": "large_array",
+                                "dimensions": list(size),
+                                "total_elements": total_elements,
+                                "data_type": "double",
+                                "statistics": {
+                                    "min": float(
+                                        self.eng.eval(f"min({var}(:))", nargout=1)
+                                    ),
+                                    "max": float(
+                                        self.eng.eval(f"max({var}(:))", nargout=1)
+                                    ),
+                                    "mean": float(
+                                        self.eng.eval(f"mean({var}(:))", nargout=1)
+                                    ),
+                                },
+                                "sample_data": [
+                                    float(x)
+                                    for x in self.eng.eval(
+                                        f"{var}(1:min({PREVIEW_ELEMENTS},numel({var})))",
+                                        nargout=1,
+                                    )._data
+                                ],
+                                "memory_usage_mb": round(
+                                    total_elements * 8 / (1024 * 1024), 2
+                                ),
+                                "compression_note": f"Array too large ({total_elements:,} elements) - showing summary only",
+                            }
+
+                    except Exception as e:
+                        workspace[var] = f"<Error processing array: {str(e)}>"
+
                 else:
+                    # Handle non-double types - use original behavior for now
                     try:
                         workspace[var] = value._data.tolist()
                     except Exception:
-                        workspace[var] = str(value)
+                        str_val = str(value)
+                        max_len = self.workspace_config.max_string_length
+                        workspace[var] = (
+                            str_val[:max_len] + "..."
+                            if len(str_val) > max_len
+                            else str_val
+                        )
+
             except Exception as e:
                 workspace[var] = f"<Error reading variable: {str(e)}>"
 
