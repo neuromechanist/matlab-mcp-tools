@@ -5,7 +5,8 @@
       "args": [],
       "env": {
         "MATLAB_PATH": "/Volumes/S1/Applications/MATLAB_R2024b.app",
-        "PATH": "/Volumes/S1/Applications/MATLAB_R2024b.app/bin:$PATH"
+        "PATH": "/Volumes/S1/Applications/MATLAB_R2024b.app/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "MATLAB_MCP_DEBUG": "true"
       },
       "disabled": false,
       "autoApprove": [

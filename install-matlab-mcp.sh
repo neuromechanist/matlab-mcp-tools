@@ -312,7 +312,8 @@ generate_config() {
       "args": [],
       "env": {
         "MATLAB_PATH": "$MATLAB_PATH",
-        "PATH": "$MATLAB_PATH/bin:\$PATH"
+        "PATH": "$MATLAB_PATH/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "MATLAB_MCP_DEBUG": "false"
       },
       "disabled": false,
       "autoApprove": [
