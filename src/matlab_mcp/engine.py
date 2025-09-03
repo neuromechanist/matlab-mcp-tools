@@ -341,12 +341,48 @@ class MatlabEngine:
                     # Generate optimized PNG with compression settings
                     png_file = self.output_dir / f"figure_{i}.png"
 
-                    # Optimize MATLAB print parameters for compression
-                    print_cmd = (
-                        f"print(figure({i + 1}), '{png_file}', '-dpng', "
-                        f"'-r{compression_config.dpi}', '-painters')"
+                    # Optimize MATLAB print parameters based on compression settings
+                    print_args = [
+                        f"'{png_file}'",
+                        "'-dpng'",
+                        f"'-r{compression_config.dpi}'",
+                    ]
+
+                    # Choose renderer based on optimization target
+                    if compression_config.optimize_for == "size":
+                        # Use OpenGL renderer for smaller files (rasterized)
+                        print_args.append("'-opengl'")
+                    else:
+                        # Use painters renderer for better quality (vector-based)
+                        print_args.append("'-painters'")
+
+                    # Add compression-friendly settings
+                    if compression_config.quality < 50:
+                        # For low quality, use loose bounds to reduce file size
+                        print_args.append("'-loose'")
+                    else:
+                        # For higher quality, use tight bounds
+                        print_args.append("'-tight'")
+
+                    # Remove unnecessary margins for smaller files
+                    print_args.append("'-fillpage'")
+
+                    # Set figure properties for optimal compression
+                    fig_optimization = (
+                        f"fig = figure({i + 1}); "
+                        f"set(fig, 'Color', 'white'); "  # White background compresses better
+                        f"set(fig, 'InvertHardcopy', 'off'); "  # Preserve background color
                     )
 
+                    # Additional optimizations based on quality setting
+                    if compression_config.quality < 70:
+                        # For lower quality, reduce anti-aliasing
+                        fig_optimization += "set(fig, 'GraphicsSmoothing', 'off'); "
+
+                    print_cmd = f"print(figure({i + 1}), {', '.join(print_args)})"
+
+                    # Apply optimizations and print
+                    self.eng.eval(fig_optimization, nargout=0)
                     self.eng.eval(print_cmd, nargout=0)
 
                     # Get original file size before compression
