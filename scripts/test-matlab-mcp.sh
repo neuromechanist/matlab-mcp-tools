@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Define variables
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV_NAME=".venv"
 VENV_PATH="$SCRIPT_DIR/$VENV_NAME"
 

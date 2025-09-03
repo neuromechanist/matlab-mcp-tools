@@ -93,7 +93,7 @@ export MATLAB_PATH="C:/Program Files/MATLAB/R2024b"
 3. Run legacy setup script:
 
 ```bash
-./setup-matlab-mcp.sh
+./scripts/setup-matlab-mcp.sh
 ```
 
 4. Configure Cursor manually:
@@ -109,7 +109,7 @@ cp mcp-pip.json ~/.cursor/mcp.json
 Test your installation:
 
 ```bash
-./test-matlab-mcp.sh
+./scripts/test-matlab-mcp.sh
 ```
 
 **Installation complete!** The MATLAB MCP server is now ready to use with Cursor/Claude Code.

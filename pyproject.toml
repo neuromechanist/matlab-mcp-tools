@@ -9,6 +9,7 @@ dependencies = [
     "mcp[cli]>=0.1.0",
     "matlabengine",
     "pydantic>=2.0.0",
+    "pillow",
 ]
 requires-python = ">=3.10"
 readme = "README.md"

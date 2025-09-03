@@ -44,16 +44,24 @@ octave-workspace
 
 # Project specific
 matlab_output/
-test_output/
+tests/output/
 *.code-workspace
 mcp-config.json
+uv.lock
+
+# Test results
+test-results/
+coverage/
+.coverage
+*.xml
 
 # Jupyter
 .ipynb_checkpoints/
 
 # DS_Store
 .DS_Store
+
 # Claude specific files
 CLAUDE.md
-.rules/
 .context/
+.rules

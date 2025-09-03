@@ -1,11 +1,11 @@
 {
   "mcpServers": {
     "matlab": {
-      "command": "matlab-mcp-server",
+      "command": "/Users/yahya/Documents/git/matlab-mcp-tools/.venv/bin/matlab-mcp-server",
       "args": [],
       "env": {
         "MATLAB_PATH": "/Volumes/S1/Applications/MATLAB_R2024b.app",
-        "PATH": "/Volumes/S1/Applications/MATLAB_R2024b.app/bin:/Users/yahya/Documents/git/matlab-mcp-tools/.venv/bin:/Users/yahya/miniconda3/bin:/Users/yahya/.gem/ruby/3.4.1/bin:/Users/yahya/.rubies/ruby-3.4.1/lib/ruby/gems/3.4.0/bin:/Users/yahya/.rubies/ruby-3.4.1/bin:/Users/yahya/go/bin:/Applications/MATLAB_R2024b.app/bin:/Users/yahya/.cursor/extensions/ms-python.python-2025.6.1-darwin-arm64/python_files/deactivate/zsh:/Users/yahya/Documents/git/hed-mcp/.venv/bin:/Users/yahya/miniconda3/condabin:/usr/bin:/bin:/usr/sbin:/sbin:/Users/yahya/.antigen/bundles/robbyrussell/oh-my-zsh/lib"
+        "PATH": "/Volumes/S1/Applications/MATLAB_R2024b.app/bin:$PATH"
       },
       "disabled": false,
       "autoApprove": [
