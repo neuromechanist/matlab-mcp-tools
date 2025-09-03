@@ -32,6 +32,10 @@ class CompressionConfig(BaseModel):
         default=False,
         description="Return file path instead of binary data to reduce bandwidth",
     )
+    smart_optimization: bool = Field(
+        default=True,
+        description="Analyze plot content to automatically optimize compression settings",
+    )
 
 
 class FigureData(BaseModel):

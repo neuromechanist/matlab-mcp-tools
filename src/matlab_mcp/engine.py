@@ -318,6 +318,89 @@ class MatlabEngine:
 
             return buffer.getvalue()
 
+    def _analyze_figure_content(self, figure_num: int) -> dict:
+        """Analyze figure content to determine optimal compression settings.
+
+        Args:
+            figure_num: Figure number to analyze
+
+        Returns:
+            Dictionary containing content analysis results
+        """
+        try:
+            # Get figure handle and analyze its content
+            analysis = {
+                "has_image_data": False,
+                "has_line_plots": False,
+                "has_text": False,
+                "has_patches": False,
+                "complexity_score": 0,
+                "recommended_quality": 75,
+            }
+
+            # Analyze figure children to understand content type
+            children_cmd = f"get(figure({figure_num}), 'Children')"
+            axes_handles = self.eng.eval(children_cmd, nargout=1)
+
+            if axes_handles:
+                for ax_idx in range(
+                    len(axes_handles) if hasattr(axes_handles, "__len__") else 1
+                ):
+                    # Get axes children (plots, images, text, etc.)
+                    ax_children_cmd = f"children = get(figure({figure_num}).Children({ax_idx + 1}), 'Children'); cellfun(@(x) class(x), children, 'UniformOutput', false)"
+
+                    try:
+                        child_types = self.eng.eval(ax_children_cmd, nargout=1)
+                        if child_types:
+                            for child_type in child_types:
+                                child_type_str = str(child_type).lower()
+
+                                if (
+                                    "image" in child_type_str
+                                    or "surface" in child_type_str
+                                ):
+                                    analysis["has_image_data"] = True
+                                    analysis["complexity_score"] += 3
+                                elif "line" in child_type_str:
+                                    analysis["has_line_plots"] = True
+                                    analysis["complexity_score"] += 1
+                                elif "text" in child_type_str:
+                                    analysis["has_text"] = True
+                                    analysis["complexity_score"] += 1
+                                elif "patch" in child_type_str:
+                                    analysis["has_patches"] = True
+                                    analysis["complexity_score"] += 2
+                    except Exception:
+                        # If analysis fails, use default values
+                        pass
+
+            # Determine recommended quality based on content
+            if analysis["has_image_data"]:
+                # Image data benefits from higher quality
+                analysis["recommended_quality"] = 85
+            elif analysis["has_patches"] or analysis["complexity_score"] > 5:
+                # Complex plots benefit from medium-high quality
+                analysis["recommended_quality"] = 75
+            elif analysis["has_line_plots"] and not analysis["has_text"]:
+                # Simple line plots can use lower quality
+                analysis["recommended_quality"] = 65
+            else:
+                # Default medium quality
+                analysis["recommended_quality"] = 70
+
+            return analysis
+
+        except Exception as e:
+            print(f"Error analyzing figure content: {e}", file=sys.stderr)
+            return {
+                "has_image_data": False,
+                "has_line_plots": True,  # Conservative default
+                "has_text": False,
+                "has_patches": False,
+                "complexity_score": 2,
+                "recommended_quality": 70,
+            }
+
     async def _capture_figures(
         self, compression_config: Optional[CompressionConfig] = None
     ) -> List[FigureData]:
@@ -341,15 +424,42 @@ class MatlabEngine:
                     # Generate optimized PNG with compression settings
                     png_file = self.output_dir / f"figure_{i}.png"
 
+                    # Create a working copy of compression config for this figure
+                    figure_compression_config = compression_config
+
+                    # Apply smart optimization if enabled
+                    if compression_config.smart_optimization:
+                        content_analysis = self._analyze_figure_content(i + 1)
+
+                        # Create optimized config based on content analysis
+                        from copy import deepcopy
+
+                        figure_compression_config = deepcopy(compression_config)
+                        figure_compression_config.quality = content_analysis[
+                            "recommended_quality"
+                        ]
+
+                        # Adjust DPI based on content complexity
+                        if content_analysis["has_image_data"]:
+                            # Higher DPI for images to preserve detail
+                            figure_compression_config.dpi = min(
+                                200, compression_config.dpi + 50
+                            )
+                        elif content_analysis["complexity_score"] <= 2:
+                            # Lower DPI for simple plots to save space
+                            figure_compression_config.dpi = max(
+                                100, compression_config.dpi - 25
+                            )
+
                     # Optimize MATLAB print parameters based on compression settings
                     print_args = [
                         f"'{png_file}'",
                         "'-dpng'",
-                        f"'-r{compression_config.dpi}'",
+                        f"'-r{figure_compression_config.dpi}'",
                     ]
 
                     # Choose renderer based on optimization target
-                    if compression_config.optimize_for == "size":
+                    if figure_compression_config.optimize_for == "size":
                         # Use OpenGL renderer for smaller files (rasterized)
                         print_args.append("'-opengl'")
                     else:
@@ -357,7 +467,7 @@ class MatlabEngine:
                         print_args.append("'-painters'")
 
                     # Add compression-friendly settings
-                    if compression_config.quality < 50:
+                    if figure_compression_config.quality < 50:
                         # For low quality, use loose bounds to reduce file size
                         print_args.append("'-loose'")
                     else:
@@ -375,7 +485,7 @@ class MatlabEngine:
                     )
 
                     # Additional optimizations based on quality setting
-                    if compression_config.quality < 70:
+                    if figure_compression_config.quality < 70:
                         # For lower quality, reduce anti-aliasing
                         fig_optimization += "set(fig, 'GraphicsSmoothing', 'off'); "
 
@@ -388,10 +498,10 @@ class MatlabEngine:
                     # Get original file size before compression
                     original_size = png_file.stat().st_size
 
-                    if compression_config.use_file_reference:
+                    if figure_compression_config.use_file_reference:
                         # Apply compression and save to disk, return file path only
                         compressed_data = self._compress_png(
-                            png_file, compression_config
+                            png_file, figure_compression_config
                         )
                         compressed_size = len(compressed_data)
 
@@ -404,21 +514,21 @@ class MatlabEngine:
                             data=None,  # No binary data, use file path instead
                             file_path=str(compressed_file),
                             format=FigureFormat.PNG,
-                            compression_config=compression_config,
+                            compression_config=figure_compression_config,
                             original_size=original_size,
                             compressed_size=compressed_size,
                         )
                     else:
                         # Return binary data as before
                         compressed_data = self._compress_png(
-                            png_file, compression_config
+                            png_file, figure_compression_config
                         )
                         compressed_size = len(compressed_data)
 
                         figure_data = FigureData(
                             data=compressed_data,
                             format=FigureFormat.PNG,
-                            compression_config=compression_config,
+                            compression_config=figure_compression_config,
                             original_size=original_size,
                             compressed_size=compressed_size,
                         )
