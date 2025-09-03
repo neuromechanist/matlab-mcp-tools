@@ -1,21 +1,30 @@
 """MATLAB engine wrapper for MCP Tool."""
 
 import os
-from pathlib import Path
 import subprocess
 import sys
-from typing import Optional, Dict, Any, List
+import time
+import uuid
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
 import matlab.engine
 from mcp.server.fastmcp import Context
 
-from .models import ExecutionResult, FigureData, FigureFormat
+from .models import (
+    ExecutionResult,
+    FigureData,
+    FigureFormat,
+    MemoryStatus,
+    PerformanceConfig,
+)
 from .utils.section_parser import extract_section
 
 
 class MatlabEngine:
     """Wrapper for MATLAB engine with enhanced functionality."""
 
-    def __init__(self):
+    def __init__(self, config: Optional[PerformanceConfig] = None):
         """Initialize MATLAB engine wrapper."""
         self.eng = None
         # Use .mcp directory in home for all outputs
@@ -23,7 +32,13 @@ class MatlabEngine:
         self.output_dir = self.mcp_dir / "matlab" / "output"
         self.output_dir.parent.mkdir(parents=True, exist_ok=True)
         self.output_dir.mkdir(exist_ok=True)
-        self.matlab_path = os.getenv('MATLAB_PATH', '/Applications/MATLAB_R2024b.app')
+        self.matlab_path = os.getenv("MATLAB_PATH", "/Applications/MATLAB_R2024b.app")
+
+        # Performance and reliability configuration
+        self.config = config or PerformanceConfig()
+        self.connection_start_time = time.time()
+        self.connection_id = str(uuid.uuid4())
+        self.last_activity = time.time()
 
     async def initialize(self) -> None:
         """Initialize MATLAB engine if not already running."""
@@ -56,10 +71,16 @@ class MatlabEngine:
             # Try to connect to existing session or start new one
             try:
                 if sessions:
-                    print("\nFound existing MATLAB sessions, attempting to connect...", file=sys.stderr)
+                    print(
+                        "\nFound existing MATLAB sessions, attempting to connect...",
+                        file=sys.stderr,
+                    )
                     self.eng = matlab.engine.connect_matlab(sessions[0])
                 else:
-                    print("\nNo existing sessions found, starting new MATLAB session...", file=sys.stderr)
+                    print(
+                        "\nNo existing sessions found, starting new MATLAB session...",
+                        file=sys.stderr,
+                    )
                     self.eng = matlab.engine.start_matlab()
 
                 if self.eng is None:
@@ -71,7 +92,9 @@ class MatlabEngine:
 
                 # Add current directory to MATLAB path
                 cwd = str(Path.cwd())
-                print(f"Adding current directory to MATLAB path: {cwd}", file=sys.stderr)
+                print(
+                    f"Adding current directory to MATLAB path: {cwd}", file=sys.stderr
+                )
                 self.eng.addpath(cwd, nargout=0)
 
                 print("MATLAB engine initialized successfully", file=sys.stderr)
@@ -85,15 +108,18 @@ class MatlabEngine:
                     raise RuntimeError(
                         f"MATLAB Python engine setup not found at {engine_setup}. "
                         "Please verify your MATLAB installation."
-                    )
+                    ) from None
 
-                print(f"Attempting to install MATLAB engine from {engine_setup}...", file=sys.stderr)
+                print(
+                    f"Attempting to install MATLAB engine from {engine_setup}...",
+                    file=sys.stderr,
+                )
                 try:
                     result = subprocess.run(
                         [sys.executable, str(engine_setup), "install"],
                         check=True,
                         capture_output=True,
-                        text=True
+                        text=True,
                     )
                     print("MATLAB engine installed successfully.", file=sys.stderr)
                     print(result.stdout, file=sys.stderr)
@@ -101,18 +127,23 @@ class MatlabEngine:
                     # Try starting engine again after installation
                     self.eng = matlab.engine.start_matlab()
                     if self.eng is None:
-                        raise RuntimeError("MATLAB engine failed to start after installation")
+                        raise RuntimeError(
+                            "MATLAB engine failed to start after installation"
+                        )
 
                     ver = self.eng.version()
                     print(f"Connected to MATLAB version: {ver}", file=sys.stderr)
-                    print("MATLAB engine initialized successfully after installation", file=sys.stderr)
+                    print(
+                        "MATLAB engine initialized successfully after installation",
+                        file=sys.stderr,
+                    )
                 except subprocess.CalledProcessError as e:
                     raise RuntimeError(
                         f"Failed to install MATLAB engine:\n"
                         f"stdout: {e.stdout}\n"
                         f"stderr: {e.stderr}\n"
                         "Please try installing manually."
-                    )
+                    ) from e
         except (ImportError, RuntimeError) as e:
             print(f"Error starting MATLAB engine: {str(e)}", file=sys.stderr)
             # Try to install MATLAB engine if not found
@@ -120,14 +151,14 @@ class MatlabEngine:
                 raise RuntimeError(
                     f"MATLAB installation not found at {self.matlab_path}. "
                     "Please set MATLAB_PATH environment variable."
-                )
+                ) from e
 
             engine_setup = Path(self.matlab_path) / "extern/engines/python/setup.py"
             if not engine_setup.exists():
                 raise RuntimeError(
                     f"MATLAB Python engine setup not found at {engine_setup}. "
                     "Please verify your MATLAB installation."
-                )
+                ) from e
 
             print(f"Installing MATLAB engine from {engine_setup}...", file=sys.stderr)
             try:
@@ -135,17 +166,19 @@ class MatlabEngine:
                     [sys.executable, str(engine_setup), "install"],
                     check=True,
                     capture_output=True,
-                    text=True
+                    text=True,
                 )
                 print("MATLAB engine installed successfully.", file=sys.stderr)
                 self.eng = matlab.engine.start_matlab()
                 if self.eng is None:
-                    raise RuntimeError("MATLAB engine failed to start after installation")
+                    raise RuntimeError(
+                        "MATLAB engine failed to start after installation"
+                    )
             except subprocess.CalledProcessError as e:
                 raise RuntimeError(
                     f"Failed to install MATLAB engine: {e.stderr}\n"
                     "Please try installing manually."
-                )
+                ) from e
 
         # Create output directory
         self.output_dir.mkdir(exist_ok=True)
@@ -162,7 +195,7 @@ class MatlabEngine:
         is_file: bool = False,
         workspace_vars: Optional[Dict[str, Any]] = None,
         capture_plots: bool = True,
-        ctx: Optional[Context] = None
+        ctx: Optional[Context] = None,
     ) -> ExecutionResult:
         """Execute a MATLAB script or command.
 
@@ -181,7 +214,7 @@ class MatlabEngine:
         try:
             # Clear existing figures if capturing plots
             if capture_plots:
-                self.eng.close('all', nargout=0)
+                self.eng.close("all", nargout=0)
 
             # Set workspace variables
             if workspace_vars:
@@ -222,7 +255,7 @@ class MatlabEngine:
             return ExecutionResult(
                 output=str(output) if output else "",
                 workspace=workspace,
-                figures=figures
+                figures=figures,
             )
 
         except matlab.engine.MatlabExecutionError as e:
@@ -230,33 +263,23 @@ class MatlabEngine:
             print(error_msg, file=sys.stderr)
             if ctx:
                 ctx.error(error_msg)
-            return ExecutionResult(
-                output="",
-                error=error_msg,
-                workspace={},
-                figures=[]
-            )
+            return ExecutionResult(output="", error=error_msg, workspace={}, figures=[])
         except Exception as e:
             error_msg = f"Python Error: {str(e)}"
             print(error_msg, file=sys.stderr)
             if ctx:
                 ctx.error(error_msg)
-            return ExecutionResult(
-                output="",
-                error=error_msg,
-                workspace={},
-                figures=[]
-            )
+            return ExecutionResult(output="", error=error_msg, workspace={}, figures=[])
 
     async def cleanup_figures(self) -> None:
         """Clean up MATLAB figures and temporary files."""
         if self.eng is not None:
             try:
                 # Close all figures
-                self.eng.eval('close all', nargout=0)
+                self.eng.eval("close all", nargout=0)
                 # Clear temporary files
-                for ext in ['png', 'svg']:
-                    for file in self.output_dir.glob(f'figure_*.{ext}'):
+                for ext in ["png", "svg"]:
+                    for file in self.output_dir.glob(f"figure_*.{ext}"):
                         try:
                             file.unlink()
                         except Exception as e:
@@ -280,25 +303,23 @@ class MatlabEngine:
 
                     # Save as PNG
                     png_file = self.output_dir / f"figure_{i}.png"
-                    self.eng.eval(f"saveas(figure({i+1}), '{png_file}')", nargout=0)
-                    with open(png_file, 'rb') as f:
-                        figure_data.append(FigureData(
-                            data=f.read(),
-                            format=FigureFormat.PNG
-                        ))
+                    self.eng.eval(f"saveas(figure({i + 1}), '{png_file}')", nargout=0)
+                    with open(png_file, "rb") as f:
+                        figure_data.append(
+                            FigureData(data=f.read(), format=FigureFormat.PNG)
+                        )
 
                     # Save as SVG
                     svg_file = self.output_dir / f"figure_{i}.svg"
                     self.eng.eval(
-                        f"set(figure({i+1}), 'Renderer', 'painters'); "
-                        f"saveas(figure({i+1}), '{svg_file}', 'svg')",
-                        nargout=0
+                        f"set(figure({i + 1}), 'Renderer', 'painters'); "
+                        f"saveas(figure({i + 1}), '{svg_file}', 'svg')",
+                        nargout=0,
                     )
-                    with open(svg_file, 'rb') as f:
-                        figure_data.append(FigureData(
-                            data=f.read(),
-                            format=FigureFormat.SVG
-                        ))
+                    with open(svg_file, "rb") as f:
+                        figure_data.append(
+                            FigureData(data=f.read(), format=FigureFormat.SVG)
+                        )
 
                     figures.extend(figure_data)
 
@@ -314,7 +335,7 @@ class MatlabEngine:
             Dictionary of variable names and their values
         """
         workspace = {}
-        var_names = self.eng.eval('who', nargout=1)
+        var_names = self.eng.eval("who", nargout=1)
 
         for var in var_names:
             try:
@@ -341,13 +362,122 @@ class MatlabEngine:
 
         return workspace
 
+    async def get_memory_status(self) -> MemoryStatus:
+        """Get current workspace memory status.
+
+        Returns:
+            MemoryStatus containing memory usage information
+        """
+        if self.eng is None:
+            return MemoryStatus(
+                total_size_mb=0.0,
+                variable_count=0,
+                largest_variable=None,
+                largest_variable_size_mb=0.0,
+                memory_limit_mb=self.config.memory_limit_mb,
+                near_limit=False,
+            )
+
+        try:
+            # Get workspace information using MATLAB's whos command
+            workspace_info = self.eng.eval("whos", nargout=1)
+
+            total_bytes = 0
+            variable_count = 0
+            largest_var_name = None
+            largest_var_size = 0
+
+            if workspace_info:
+                for var_info in workspace_info:
+                    var_size = var_info["bytes"]
+                    total_bytes += var_size
+                    variable_count += 1
+
+                    if var_size > largest_var_size:
+                        largest_var_size = var_size
+                        largest_var_name = var_info["name"]
+
+            total_size_mb = total_bytes / (1024 * 1024)
+            largest_size_mb = largest_var_size / (1024 * 1024)
+
+            # Check if near memory limit (80% threshold)
+            near_limit = False
+            if self.config.memory_limit_mb:
+                near_limit = total_size_mb > (self.config.memory_limit_mb * 0.8)
+
+            return MemoryStatus(
+                total_size_mb=total_size_mb,
+                variable_count=variable_count,
+                largest_variable=largest_var_name,
+                largest_variable_size_mb=largest_size_mb,
+                memory_limit_mb=self.config.memory_limit_mb,
+                near_limit=near_limit,
+            )
+
+        except Exception as e:
+            print(f"Error getting memory status: {e}", file=sys.stderr)
+            return MemoryStatus(
+                total_size_mb=0.0,
+                variable_count=0,
+                largest_variable=None,
+                largest_variable_size_mb=0.0,
+                memory_limit_mb=self.config.memory_limit_mb,
+                near_limit=False,
+            )
+
+    async def check_memory_limit(self) -> bool:
+        """Check if workspace memory usage exceeds configured limit.
+
+        Returns:
+            True if memory limit is exceeded, False otherwise
+        """
+        if not self.config.memory_limit_mb:
+            return False
+
+        memory_status = await self.get_memory_status()
+        return memory_status.total_size_mb > self.config.memory_limit_mb
+
+    async def clear_large_variables(self, threshold_mb: float = 100.0) -> List[str]:
+        """Clear variables larger than specified threshold.
+
+        Args:
+            threshold_mb: Size threshold in MB
+
+        Returns:
+            List of cleared variable names
+        """
+        if self.eng is None:
+            return []
+
+        try:
+            cleared_vars = []
+            workspace_info = self.eng.eval("whos", nargout=1)
+
+            if workspace_info:
+                for var_info in workspace_info:
+                    var_size_mb = var_info["bytes"] / (1024 * 1024)
+                    if var_size_mb > threshold_mb:
+                        var_name = var_info["name"]
+                        self.eng.eval(f"clear {var_name}", nargout=0)
+                        cleared_vars.append(var_name)
+                        print(
+                            f"Cleared variable '{var_name}' ({var_size_mb:.1f} MB)",
+                            file=sys.stderr,
+                        )
+
+            return cleared_vars
+
+        except Exception as e:
+            print(f"Error clearing large variables: {e}", file=sys.stderr)
+            return []
+
     async def execute_section(
         self,
         file_path: str,
         section_range: tuple[int, int],
         maintain_workspace: bool = True,
         capture_plots: bool = True,
-        ctx: Optional[Context] = None
+        ctx: Optional[Context] = None,
     ) -> ExecutionResult:
         """Execute a specific section of a MATLAB script.
 
@@ -367,10 +497,7 @@ class MatlabEngine:
 
         # Extract the section code
         section_code = extract_section(
-            script_path,
-            section_range[0],
-            section_range[1],
-            maintain_workspace
+            script_path, section_range[0], section_range[1], maintain_workspace
         )
 
         if ctx:
@@ -378,10 +505,7 @@ class MatlabEngine:
 
         # Execute the section
         return await self.execute(
-            section_code,
-            is_file=False,
-            capture_plots=capture_plots,
-            ctx=ctx
+            section_code, is_file=False, capture_plots=capture_plots, ctx=ctx
         )
 
     def close(self) -> None:
@@ -389,7 +513,7 @@ class MatlabEngine:
         if self.eng is not None:
             try:
                 # Clean up figures first
-                self.eng.eval('close all', nargout=0)
+                self.eng.eval("close all", nargout=0)
                 # Then quit the engine
                 self.eng.quit()
             except Exception as e:
