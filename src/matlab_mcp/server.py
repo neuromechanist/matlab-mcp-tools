@@ -5,27 +5,26 @@ import logging
 import os
 import signal
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Tuple
-from pydantic import Field
+from typing import Any, Dict, List, Optional, Tuple
 
-from mcp.server.fastmcp import FastMCP, Image, Context
+from mcp.server.fastmcp import Context, FastMCP, Image
 
 from .engine import MatlabEngine
+from .models import CompressionConfig
 from .utils.section_parser import get_section_info
 
-
 # Configure logging based on debug mode
-debug_mode = os.getenv('MATLAB_MCP_DEBUG', '').lower() in ('true', '1', 'yes')
+debug_mode = os.getenv("MATLAB_MCP_DEBUG", "").lower() in ("true", "1", "yes")
 
 # Configure root logger
 logging.basicConfig(
     level=logging.DEBUG if debug_mode else logging.WARNING,
-    format='%(message)s',
-    force=True
+    format="%(message)s",
+    force=True,
 )
 
 # Configure MCP loggers to be completely silent unless in debug mode
-for logger_name in ['mcp', 'mcp.server', 'mcp.client', 'mcp.shared']:
+for logger_name in ["mcp", "mcp.server", "mcp.client", "mcp.shared"]:
     logger = logging.getLogger(logger_name)
     if not debug_mode:
         logger.addHandler(logging.NullHandler())
@@ -37,7 +36,7 @@ mcp = FastMCP(
     "MATLAB",
     dependencies=["matlabengine"],
     debug=debug_mode,
-    instructions="MATLAB MCP server providing access to MATLAB engine functionality."
+    instructions="MATLAB MCP server providing access to MATLAB engine functionality.",
 )
 
 # Log startup mode
@@ -120,21 +119,12 @@ class MatlabServer:
 # Define tools at module level
 @mcp.tool()
 async def execute_script(
-    script: str = Field(description="MATLAB code or script to execute"),
-    is_file: bool = Field(description="Whether script is a file path. If True, script is read from file, make sure to"
-                          " use the full path. Also, if True, it is RECOMMENDED to use the 'get_script_sections' tool"
-                          " to get the section ranges first, and then use the 'execute_section' tool to execute"
-                          " the file section by section.",
-                          default=False),
-    workspace_vars: Optional[Dict[str, Any]] = Field(
-        description="Variables to inject into workspace",
-        default=None
-    ),
-    capture_plots: bool = Field(
-        description="Whether to capture generated plots",
-        default=True
-    ),
-    ctx: Optional[Context] = None
+    script: str,
+    is_file: bool = False,
+    workspace_vars: Optional[Dict[str, Any]] = None,
+    capture_plots: bool = True,
+    compression_config: Optional[CompressionConfig] = None,
+    ctx: Optional[Context] = None,
 ) -> Dict[str, Any]:
     """Execute MATLAB code and return results with plots.
 
@@ -155,38 +145,28 @@ async def execute_script(
         is_file=is_file,
         workspace_vars=workspace_vars,
         capture_plots=capture_plots,
-        ctx=ctx
+        compression_config=compression_config,
+        ctx=ctx,
     )
 
     # Convert FigureData to MCP Image objects
-    figures = [
-        Image(data=fig.data, format=fig.format.value)
-        for fig in result.figures
-    ]
+    figures = [Image(data=fig.data, format=fig.format.value) for fig in result.figures]
 
     return {
         "output": result.output,
         "error": result.error,
         "workspace": result.workspace,
-        "figures": figures
+        "figures": figures,
     }
 
 
 @mcp.tool()
 async def execute_section(
-    script_name: str = Field(description="Name of the script file, the script name should include the full path"),
-    section_range: Tuple[int, int] = Field(
-        description="Start and end line numbers for the section"
-    ),
-    maintain_workspace: bool = Field(
-        description="Keep workspace between sections",
-        default=True
-    ),
-    capture_plots: bool = Field(
-        description="Whether to capture generated plots",
-        default=True
-    ),
-    ctx: Optional[Context] = None
+    script_name: str,
+    section_range: Tuple[int, int],
+    maintain_workspace: bool = True,
+    capture_plots: bool = True,
+    ctx: Optional[Context] = None,
 ) -> Dict[str, Any]:
     """Execute a specific section of a MATLAB script.
     To use this tool, you should first the use the `get_script_sections` tool to get the section ranges.
@@ -212,27 +192,22 @@ async def execute_section(
         section_range,
         maintain_workspace=maintain_workspace,
         capture_plots=capture_plots,
-        ctx=ctx
+        ctx=ctx,
     )
 
     # Convert FigureData to MCP Image objects
-    figures = [
-        Image(data=fig.data, format=fig.format.value)
-        for fig in result.figures
-    ]
+    figures = [Image(data=fig.data, format=fig.format.value) for fig in result.figures]
 
     return {
         "output": result.output,
         "error": result.error,
         "workspace": result.workspace,
-        "figures": figures
+        "figures": figures,
     }
 
 
 @mcp.tool()
-async def get_workspace(
-    ctx: Optional[Context] = None
-) -> Dict[str, Any]:
+async def get_workspace(ctx: Optional[Context] = None) -> Dict[str, Any]:
     """Get current MATLAB workspace variables.
 
     Returns a dictionary mapping variable names to their values.
@@ -249,8 +224,7 @@ async def get_workspace(
 
 @mcp.tool()
 async def get_script_sections(
-    script_name: str = Field(description="Name of the script file, the script name should include the full path"),
-    ctx: Optional[Context] = None
+    script_name: str, ctx: Optional[Context] = None
 ) -> List[Dict[str, Any]]:
     """Get information about sections in a MATLAB script.
 
@@ -274,9 +248,7 @@ async def get_script_sections(
 
 @mcp.tool()
 async def create_matlab_script(
-    script_name: str = Field(description="Name of the script (include the .m in the name)"),
-    code: str = Field(description="MATLAB code to save"),
-    ctx: Optional[Context] = None
+    script_name: str, code: str, ctx: Optional[Context] = None
 ) -> str:
     """Create a new MATLAB script file.
 
@@ -286,13 +258,13 @@ async def create_matlab_script(
     await server.initialize()
 
     # Remove .m extension if present for validation
-    base_name = script_name[:-2] if script_name.endswith('.m') else script_name
+    base_name = script_name[:-2] if script_name.endswith(".m") else script_name
 
     if not base_name.isidentifier():
         raise ValueError("Script name must be a valid MATLAB identifier")
 
     # Ensure .m extension is present
-    if not script_name.endswith('.m'):
+    if not script_name.endswith(".m"):
         script_name = f"{script_name}.m"
 
     script_path = server.scripts_dir / script_name
@@ -337,7 +309,7 @@ def run_server():
         print("MATLAB engine initialized successfully")
 
         # Configure MCP logging to suppress request processing messages
-        mcp_logger = logging.getLogger('mcp')
+        mcp_logger = logging.getLogger("mcp")
         mcp_logger.setLevel(logging.WARNING)
 
         print("Server is running and ready to accept connections")
@@ -345,7 +317,7 @@ def run_server():
         print("Press Ctrl+C to shutdown gracefully")
 
         # Run the MCP server with stdio transport
-        mcp.run(transport='stdio')
+        mcp.run(transport="stdio")
     except KeyboardInterrupt:
         print("\nReceived keyboard interrupt...")
         server.close()
