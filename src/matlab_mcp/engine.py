@@ -14,6 +14,7 @@ import matlab.engine
 from mcp.server.fastmcp import Context
 
 from .models import (
+    ConnectionStatus,
     ExecutionResult,
     FigureData,
     FigureFormat,
@@ -21,6 +22,108 @@ from .models import (
     PerformanceConfig,
 )
 from .utils.section_parser import extract_section
+
+
+class MatlabConnectionPool:
+    """Connection pool manager for MATLAB engines."""
+
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls):
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+                    cls._instance._initialized = False
+        return cls._instance
+
+    def __init__(self):
+        if not getattr(self, "_initialized", False):
+            self.engines = {}  # connection_id -> engine mapping
+            self.engine_usage = {}  # connection_id -> last_used timestamp
+            self.max_connections = 3  # Maximum concurrent MATLAB connections
+            self._initialized = True
+
+    async def get_engine(self, connection_id: str = None) -> matlab.engine.MatlabEngine:
+        """Get or create a MATLAB engine connection.
+
+        Args:
+            connection_id: Specific connection ID, creates new if None
+
+        Returns:
+            MATLAB engine instance
+        """
+        if connection_id and connection_id in self.engines:
+            # Update last used time
+            self.engine_usage[connection_id] = time.time()
+            return self.engines[connection_id]
+
+        # Create new connection if under limit
+        if len(self.engines) < self.max_connections:
+            new_id = connection_id or str(uuid.uuid4())
+            engine = await self._create_engine()
+
+            if engine:
+                self.engines[new_id] = engine
+                self.engine_usage[new_id] = time.time()
+                return engine
+
+        # Find least recently used connection to reuse
+        if self.engines:
+            oldest_id = min(self.engine_usage, key=self.engine_usage.get)
+            self.engine_usage[oldest_id] = time.time()
+            return self.engines[oldest_id]
+
+        # Fallback: create single engine
+        return await self._create_engine()
+
+    async def _create_engine(self) -> Optional[matlab.engine.MatlabEngine]:
+        """Create a new MATLAB engine instance."""
+        try:
+            # Try to find existing sessions first
+            sessions = matlab.engine.find_matlab()
+            if sessions:
+                return matlab.engine.connect_matlab(sessions[0])
+            else:
+                return matlab.engine.start_matlab()
+        except Exception as e:
+            print(f"Error creating MATLAB engine: {e}", file=sys.stderr)
+            return None
+
+    def cleanup_idle_connections(self, idle_timeout: int = 300):
+        """Remove connections that have been idle for too long.
+
+        Args:
+            idle_timeout: Idle timeout in seconds (default 5 minutes)
+        """
+        current_time = time.time()
+        idle_connections = [
+            conn_id
+            for conn_id, last_used in self.engine_usage.items()
+            if current_time - last_used > idle_timeout
+        ]
+
+        for conn_id in idle_connections:
+            try:
+                engine = self.engines.pop(conn_id)
+                engine.quit()
+                del self.engine_usage[conn_id]
+                print(f"Cleaned up idle MATLAB connection: {conn_id}", file=sys.stderr)
+            except Exception as e:
+                print(f"Error cleaning up connection {conn_id}: {e}", file=sys.stderr)
+
+    def close_all_connections(self):
+        """Close all MATLAB engine connections."""
+        for conn_id, engine in self.engines.items():
+            try:
+                engine.quit()
+                print(f"Closed MATLAB connection: {conn_id}", file=sys.stderr)
+            except Exception as e:
+                print(f"Error closing connection {conn_id}: {e}", file=sys.stderr)
+
+        self.engines.clear()
+        self.engine_usage.clear()
 
 
 class MatlabEngine:
@@ -42,119 +145,81 @@ class MatlabEngine:
         self.connection_id = str(uuid.uuid4())
         self.last_activity = time.time()
 
+        # Connection pool for improved performance
+        self.connection_pool = MatlabConnectionPool()
+
     async def initialize(self) -> None:
         """Initialize MATLAB engine if not already running."""
         if self.eng is not None:
             return
 
         try:
-            print("\n=== MATLAB Engine Initialization ===", file=sys.stderr)
-            print(f"MATLAB_PATH: {self.matlab_path}", file=sys.stderr)
-            print(f"Python executable: {sys.executable}", file=sys.stderr)
-            print(f"matlab.engine path: {matlab.engine.__file__}", file=sys.stderr)
-            print(f"Current working directory: {os.getcwd()}", file=sys.stderr)
-            print(f"PYTHONPATH: {os.getenv('PYTHONPATH', 'Not set')}", file=sys.stderr)
+            print(
+                f"\n=== MATLAB Engine Initialization (ID: {self.connection_id}) ===",
+                file=sys.stderr,
+            )
 
-            # Verify MATLAB installation
-            if not os.path.exists(self.matlab_path):
-                raise RuntimeError(
-                    f"MATLAB installation not found at {self.matlab_path}. "
-                    "Please verify MATLAB_PATH environment variable."
-                )
+            # Try to get engine from connection pool
+            self.eng = await self.connection_pool.get_engine(self.connection_id)
 
-            # Try to find all available MATLAB sessions
-            try:
-                sessions = matlab.engine.find_matlab()
-                print(f"Available MATLAB sessions: {sessions}", file=sys.stderr)
-            except Exception as e:
-                print(f"Error finding MATLAB sessions: {e}", file=sys.stderr)
-                sessions = []
-
-            # Try to connect to existing session or start new one
-            try:
-                if sessions:
-                    print(
-                        "\nFound existing MATLAB sessions, attempting to connect...",
-                        file=sys.stderr,
-                    )
-                    self.eng = matlab.engine.connect_matlab(sessions[0])
-                else:
-                    print(
-                        "\nNo existing sessions found, starting new MATLAB session...",
-                        file=sys.stderr,
-                    )
-                    self.eng = matlab.engine.start_matlab()
-
-                if self.eng is None:
-                    raise RuntimeError("MATLAB engine failed to start (returned None)")
-
-                # Test basic MATLAB functionality
-                ver = self.eng.version()
-                print(f"Connected to MATLAB version: {ver}", file=sys.stderr)
-
-                # Add current directory to MATLAB path
-                cwd = str(Path.cwd())
+            if self.eng is None:
+                # Fallback to traditional initialization if pool fails
                 print(
-                    f"Adding current directory to MATLAB path: {cwd}", file=sys.stderr
-                )
-                self.eng.addpath(cwd, nargout=0)
-
-                print("MATLAB engine initialized successfully", file=sys.stderr)
-                return
-
-            except Exception as e:
-                print(f"Error starting MATLAB engine: {e}", file=sys.stderr)
-                # Try to install MATLAB engine if not found
-                engine_setup = Path(self.matlab_path) / "extern/engines/python/setup.py"
-                if not engine_setup.exists():
-                    raise RuntimeError(
-                        f"MATLAB Python engine setup not found at {engine_setup}. "
-                        "Please verify your MATLAB installation."
-                    ) from None
-
-                print(
-                    f"Attempting to install MATLAB engine from {engine_setup}...",
+                    "Connection pool failed, falling back to direct connection...",
                     file=sys.stderr,
                 )
+                await self._fallback_initialize()
+            else:
+                print(
+                    f"Using pooled MATLAB connection: {self.connection_id}",
+                    file=sys.stderr,
+                )
+
+                # Test basic MATLAB functionality
                 try:
-                    result = subprocess.run(
-                        [sys.executable, str(engine_setup), "install"],
-                        check=True,
-                        capture_output=True,
-                        text=True,
-                    )
-                    print("MATLAB engine installed successfully.", file=sys.stderr)
-                    print(result.stdout, file=sys.stderr)
-
-                    # Try starting engine again after installation
-                    self.eng = matlab.engine.start_matlab()
-                    if self.eng is None:
-                        raise RuntimeError(
-                            "MATLAB engine failed to start after installation"
-                        )
-
                     ver = self.eng.version()
                     print(f"Connected to MATLAB version: {ver}", file=sys.stderr)
+                except Exception:
+                    # Connection might be stale, try fallback
                     print(
-                        "MATLAB engine initialized successfully after installation",
+                        "Pooled connection appears stale, creating new connection...",
                         file=sys.stderr,
                     )
-                except subprocess.CalledProcessError as e:
-                    raise RuntimeError(
-                        f"Failed to install MATLAB engine:\n"
-                        f"stdout: {e.stdout}\n"
-                        f"stderr: {e.stderr}\n"
-                        "Please try installing manually."
-                    ) from e
-        except (ImportError, RuntimeError) as e:
-            print(f"Error starting MATLAB engine: {str(e)}", file=sys.stderr)
-            # Try to install MATLAB engine if not found
-            if not os.path.exists(self.matlab_path):
-                raise RuntimeError(
-                    f"MATLAB installation not found at {self.matlab_path}. "
-                    "Please set MATLAB_PATH environment variable."
-                ) from e
+                    await self._fallback_initialize()
 
+        except Exception as e:
+            print(f"Error with connection pool: {e}", file=sys.stderr)
+            await self._fallback_initialize()
+
+        # Create output directory
+        self.output_dir.mkdir(exist_ok=True)
+
+        # Add current directory to MATLAB path
+        if self.eng is not None:
+            try:
+                self.eng.addpath(str(Path.cwd()), nargout=0)
+            except Exception as e:
+                print(
+                    f"Warning: Could not add current directory to path: {e}",
+                    file=sys.stderr,
+                )
+        else:
+            raise RuntimeError("MATLAB engine is still None after initialization")
+
+    async def _fallback_initialize(self) -> None:
+        """Fallback initialization without connection pool."""
+        try:
+            sessions = matlab.engine.find_matlab()
+            if sessions:
+                self.eng = matlab.engine.connect_matlab(sessions[0])
+            else:
+                self.eng = matlab.engine.start_matlab()
+
+            if self.eng is None:
+                raise RuntimeError("MATLAB engine failed to start")
+
+        except Exception as e:
+            # Try to install MATLAB engine if needed
             engine_setup = Path(self.matlab_path) / "extern/engines/python/setup.py"
             if not engine_setup.exists():
                 raise RuntimeError(
@@ -170,26 +235,16 @@ class MatlabEngine:
                     capture_output=True,
                     text=True,
                 )
-                print("MATLAB engine installed successfully.", file=sys.stderr)
                 self.eng = matlab.engine.start_matlab()
                 if self.eng is None:
                     raise RuntimeError(
                         "MATLAB engine failed to start after installation"
                     )
-            except subprocess.CalledProcessError as e:
+            except subprocess.CalledProcessError as install_e:
                 raise RuntimeError(
-                    f"Failed to install MATLAB engine: {e.stderr}\n"
+                    f"Failed to install MATLAB engine: {install_e.stderr}\n"
                     "Please try installing manually."
-                ) from e
-
-        # Create output directory
-        self.output_dir.mkdir(exist_ok=True)
-
-        # Add current directory to MATLAB path
-        if self.eng is not None:
-            self.eng.addpath(str(Path.cwd()))
-        else:
-            raise RuntimeError("MATLAB engine is still None after initialization")
+                ) from install_e
 
     async def _execute_with_timeout(
         self, matlab_command: str, timeout_seconds: Optional[int] = None
@@ -611,6 +666,27 @@ class MatlabEngine:
             print(f"Error clearing large variables: {e}", file=sys.stderr)
             return []
 
+    async def get_connection_status(self) -> ConnectionStatus:
+        """Get current connection status information.
+
+        Returns:
+            ConnectionStatus containing connection information
+        """
+        is_connected = self.eng is not None
+        uptime = time.time() - self.connection_start_time
+
+        return ConnectionStatus(
+            is_connected=is_connected,
+            connection_id=self.connection_id,
+            uptime_seconds=uptime,
+            last_activity=self.last_activity,
+        )
+
+    async def cleanup_idle_connections(self):
+        """Clean up idle connections in the connection pool."""
+        if hasattr(self, "connection_pool"):
+            self.connection_pool.cleanup_idle_connections()
+
     async def execute_section(
         self,
         file_path: str,
@@ -654,9 +730,21 @@ class MatlabEngine:
             try:
                 # Clean up figures first
                 self.eng.eval("close all", nargout=0)
-                # Then quit the engine
-                self.eng.quit()
             except Exception as e:
-                print(f"Error during engine cleanup: {e}", file=sys.stderr)
-            finally:
+                print(f"Error cleaning up figures: {e}", file=sys.stderr)
+
+            # Don't quit the engine if using connection pool - let pool manage it
+            if hasattr(self, "connection_pool"):
+                print(
+                    f"Connection returned to pool: {self.connection_id}",
+                    file=sys.stderr,
+                )
                 self.eng = None
+            else:
+                # Traditional cleanup
+                try:
+                    self.eng.quit()
+                except Exception as e:
+                    print(f"Error during engine cleanup: {e}", file=sys.stderr)
+                finally:
+                    self.eng = None
