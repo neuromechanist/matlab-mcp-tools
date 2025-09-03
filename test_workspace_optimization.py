@@ -64,6 +64,13 @@ async def test_current_implementation():
         print(f"JSON size: {byte_size:,} bytes ({byte_size / 1024 / 1024:.2f} MB)")
         print(f"Estimated tokens: {token_count:,}")
 
+        # Show structure for large matrix
+        if name == "large_matrix":
+            print("Optimized structure:")
+            import json
+
+            print(json.dumps(workspace[name], indent=2))
+
         results[name] = {
             "byte_size": byte_size,
             "token_count": token_count,
