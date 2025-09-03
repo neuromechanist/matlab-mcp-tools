@@ -4,7 +4,9 @@ import io
 import os
 import subprocess
 import sys
+import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -12,7 +14,13 @@ import matlab.engine
 from mcp.server.fastmcp import Context
 from PIL import Image
 
-from .models import CompressionConfig, ExecutionResult, FigureData, FigureFormat
+from .models import (
+    CompressionConfig,
+    ExecutionResult,
+    FigureData,
+    FigureFormat,
+    PerformanceConfig,
+)
 from .utils.section_parser import extract_section
 
 
@@ -34,10 +42,116 @@ class WorkspaceConfig:
         )
 
 
+class MatlabConnectionPool:
+    """Connection pool manager for MATLAB engines."""
+
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls):
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+                    cls._instance._initialized = False
+        return cls._instance
+
+    def __init__(self):
+        if not getattr(self, "_initialized", False):
+            self.engines = {}  # connection_id -> engine mapping
+            self.engine_usage = {}  # connection_id -> last_used timestamp
+            self.max_connections = 3  # Maximum concurrent MATLAB connections
+            self._initialized = True
+
+    async def get_engine(self, connection_id: str = None) -> matlab.engine.MatlabEngine:
+        """Get or create a MATLAB engine connection.
+
+        Args:
+            connection_id: Specific connection ID, creates new if None
+
+        Returns:
+            MATLAB engine instance
+        """
+        if connection_id and connection_id in self.engines:
+            # Update last used time
+            self.engine_usage[connection_id] = time.time()
+            return self.engines[connection_id]
+
+        # Create new connection if under limit
+        if len(self.engines) < self.max_connections:
+            new_id = connection_id or str(uuid.uuid4())
+            engine = await self._create_engine()
+
+            if engine:
+                self.engines[new_id] = engine
+                self.engine_usage[new_id] = time.time()
+                return engine
+
+        # Find least recently used connection to reuse
+        if self.engines:
+            oldest_id = min(self.engine_usage, key=self.engine_usage.get)
+            self.engine_usage[oldest_id] = time.time()
+            return self.engines[oldest_id]
+
+        # Fallback: create single engine
+        return await self._create_engine()
+
+    async def _create_engine(self) -> Optional[matlab.engine.MatlabEngine]:
+        """Create a new MATLAB engine instance."""
+        try:
+            # Try to find existing sessions first
+            sessions = matlab.engine.find_matlab()
+            if sessions:
+                return matlab.engine.connect_matlab(sessions[0])
+            else:
+                return matlab.engine.start_matlab()
+        except Exception as e:
+            print(f"Error creating MATLAB engine: {e}", file=sys.stderr)
+            return None
+
+    def cleanup_idle_connections(self, idle_timeout: int = 300):
+        """Remove connections that have been idle for too long.
+
+        Args:
+            idle_timeout: Idle timeout in seconds (default 5 minutes)
+        """
+        current_time = time.time()
+        idle_connections = [
+            conn_id
+            for conn_id, last_used in self.engine_usage.items()
+            if current_time - last_used > idle_timeout
+        ]
+
+        for conn_id in idle_connections:
+            try:
+                engine = self.engines.pop(conn_id)
+                engine.quit()
+                del self.engine_usage[conn_id]
+                print(f"Cleaned up idle MATLAB connection: {conn_id}", file=sys.stderr)
+            except Exception as e:
+                print(f"Error cleaning up connection {conn_id}: {e}", file=sys.stderr)
+
+    def close_all_connections(self):
+        """Close all MATLAB engine connections."""
+        for conn_id, engine in self.engines.items():
+            try:
+                engine.quit()
+                print(f"Closed MATLAB connection: {conn_id}", file=sys.stderr)
+            except Exception as e:
+                print(f"Error closing connection {conn_id}: {e}", file=sys.stderr)
+
+        self.engines.clear()
+        self.engine_usage.clear()
+
+
 class MatlabEngine:
     """Wrapper for MATLAB engine with enhanced functionality."""
 
-    def __init__(self, workspace_config: Optional[WorkspaceConfig] = None):
+    def __init__(
+        self,
+        config: Optional[PerformanceConfig] = None,
+        workspace_config: Optional[WorkspaceConfig] = None,
+    ):
         """Initialize MATLAB engine wrapper."""
         self.eng = None
         # Use .mcp directory in home for all outputs
@@ -49,6 +163,19 @@ class MatlabEngine:
 
         # Workspace optimization configuration
         self.workspace_config = workspace_config or WorkspaceConfig()
+
+        # Performance and reliability configuration
+        self.config = config or PerformanceConfig()
+        self.connection_start_time = time.time()
+        self.connection_id = str(uuid.uuid4())
+        self.last_activity = time.time()
+
+        # Connection pool for improved performance
+        self.connection_pool = MatlabConnectionPool()
+
+        # Hot reloading for script development
+        self.watched_files = {}  # file_path -> last_modified_time
+        self.file_cache = {}  # file_path -> cached_content
 
     async def initialize(self) -> None:
         """Initialize MATLAB engine if not already running."""
