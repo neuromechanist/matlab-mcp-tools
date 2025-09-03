@@ -229,8 +229,6 @@ install_uv() {
 
 # Detect optimal Python version based on MATLAB
 detect_python_version() {
-    show_progress "Detecting optimal Python version for MATLAB"
-    
     # Try to get MATLAB version info if possible
     local python_version="3.11"  # Default to 3.11 as it's widely supported
     
@@ -244,7 +242,6 @@ detect_python_version() {
         python_version="3.9"
     fi
     
-    log_info "Using Python $python_version for MATLAB compatibility"
     echo "$python_version"
 }
 
@@ -252,7 +249,9 @@ detect_python_version() {
 setup_venv() {
     show_progress "Setting up virtual environment"
     
+    show_progress "Detecting optimal Python version for MATLAB"
     local python_version=$(detect_python_version)
+    log_info "Using Python $python_version for MATLAB compatibility"
     
     if [[ -d "$VENV_PATH" ]]; then
         log_info "Virtual environment already exists at $VENV_PATH"
@@ -261,7 +260,14 @@ setup_venv() {
     fi
     
     log_info "Creating new virtual environment with Python $python_version"
-    uv venv "$VENV_PATH" --python "$python_version"
+    uv venv "$VENV_PATH" --python "$python_version" || {
+        log_error "Failed to create virtual environment with Python $python_version"
+        log_info "Trying with system default Python"
+        uv venv "$VENV_PATH" || {
+            log_error "Failed to create virtual environment"
+            exit 1
+        }
+    }
     
     if [[ ! -d "$VENV_PATH" ]]; then
         log_error "Failed to create virtual environment"
