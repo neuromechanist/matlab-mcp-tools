@@ -1,8 +1,10 @@
 """MATLAB engine wrapper for MCP Tool."""
 
+import asyncio
 import os
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -189,6 +191,71 @@ class MatlabEngine:
         else:
             raise RuntimeError("MATLAB engine is still None after initialization")
 
+    async def _execute_with_timeout(
+        self, matlab_command: str, timeout_seconds: Optional[int] = None
+    ) -> str:
+        """Execute MATLAB command with timeout protection.
+
+        Args:
+            matlab_command: MATLAB command to execute
+            timeout_seconds: Timeout in seconds, uses config default if None
+
+        Returns:
+            Command output
+
+        Raises:
+            TimeoutError: If command exceeds timeout
+            matlab.engine.MatlabExecutionError: If MATLAB execution fails
+        """
+        if self.eng is None:
+            raise RuntimeError("MATLAB engine not initialized")
+
+        timeout = timeout_seconds or self.config.execution_timeout_seconds
+
+        if not timeout:
+            # No timeout configured, execute normally
+            return self.eng.eval(matlab_command, nargout=0)
+
+        # Create a result container and exception container
+        result = {"output": None, "error": None, "completed": False}
+
+        def execute_command():
+            """Execute the MATLAB command in a separate thread."""
+            try:
+                output = self.eng.eval(matlab_command, nargout=0)
+                result["output"] = output
+                result["completed"] = True
+            except Exception as e:
+                result["error"] = e
+                result["completed"] = True
+
+        # Start execution in a separate thread
+        execution_thread = threading.Thread(target=execute_command, daemon=True)
+        execution_thread.start()
+
+        # Wait for completion or timeout
+        start_time = time.time()
+        while not result["completed"] and (time.time() - start_time) < timeout:
+            await asyncio.sleep(0.1)  # Check every 100ms
+
+        if not result["completed"]:
+            # Timeout occurred - try to interrupt MATLAB
+            try:
+                # Send Ctrl+C to MATLAB process
+                self.eng.eval("dbquit all", nargout=0)
+            except Exception:
+                pass  # May fail if MATLAB is hung
+
+            raise TimeoutError(
+                f"MATLAB execution timed out after {timeout} seconds. "
+                "Command may be stuck in infinite loop."
+            )
+
+        if result["error"]:
+            raise result["error"]
+
+        return result["output"]
+
     async def execute(
         self,
         script: str,
@@ -211,6 +278,9 @@ class MatlabEngine:
         """
         await self.initialize()
 
+        # Track execution time
+        start_time = time.time()
+
         try:
             # Clear existing figures if capturing plots
             if capture_plots:
@@ -229,7 +299,19 @@ class MatlabEngine:
                     else:
                         self.eng.workspace[name] = value
 
-            # Execute script
+            # Check memory limit before execution
+            if self.config.memory_limit_mb:
+                memory_exceeded = await self.check_memory_limit()
+                if memory_exceeded:
+                    if ctx:
+                        ctx.warning("Memory limit exceeded, clearing large variables")
+                    cleared = await self.clear_large_variables()
+                    print(
+                        f"Cleared {len(cleared)} large variables to free memory",
+                        file=sys.stderr,
+                    )
+
+            # Execute script with timeout protection
             if is_file:
                 script_path = Path(script)
                 if not script_path.exists():
@@ -241,35 +323,93 @@ class MatlabEngine:
                 if ctx:
                     ctx.info("Executing MATLAB command")
                     print(f"Executing MATLAB command: {script}", file=sys.stderr)
-                # Don't pass stdout/stderr to eval since we're not in a terminal
-                output = self.eng.eval(script, nargout=0)
+                # Use timeout-protected execution
+                output = await self._execute_with_timeout(script)
+
+            # Update last activity time
+            self.last_activity = time.time()
+            execution_time = self.last_activity - start_time
 
             # Capture figures if requested
             figures = []
             if capture_plots:
                 figures = await self._capture_figures()
 
-            # Get workspace state
+            # Get workspace state and memory status
             workspace = await self.get_workspace()
+            memory_status = await self.get_memory_status()
 
             return ExecutionResult(
                 output=str(output) if output else "",
                 workspace=workspace,
                 figures=figures,
+                execution_time_seconds=execution_time,
+                memory_status=memory_status,
             )
 
+        except TimeoutError as e:
+            execution_time = time.time() - start_time
+            error_msg = f"Execution Timeout: {str(e)}"
+            print(error_msg, file=sys.stderr)
+            if ctx:
+                ctx.error(error_msg)
+
+            # Try to get memory status even after timeout
+            try:
+                memory_status = await self.get_memory_status()
+            except Exception:
+                memory_status = None
+
+            return ExecutionResult(
+                output="",
+                error=error_msg,
+                workspace={},
+                figures=[],
+                execution_time_seconds=execution_time,
+                memory_status=memory_status,
+            )
         except matlab.engine.MatlabExecutionError as e:
+            execution_time = time.time() - start_time
             error_msg = f"MATLAB Error: {str(e)}"
             print(error_msg, file=sys.stderr)
             if ctx:
                 ctx.error(error_msg)
-            return ExecutionResult(output="", error=error_msg, workspace={}, figures=[])
+
+            # Try to get memory status even after error
+            try:
+                memory_status = await self.get_memory_status()
+            except Exception:
+                memory_status = None
+
+            return ExecutionResult(
+                output="",
+                error=error_msg,
+                workspace={},
+                figures=[],
+                execution_time_seconds=execution_time,
+                memory_status=memory_status,
+            )
         except Exception as e:
+            execution_time = time.time() - start_time
             error_msg = f"Python Error: {str(e)}"
             print(error_msg, file=sys.stderr)
             if ctx:
                 ctx.error(error_msg)
-            return ExecutionResult(output="", error=error_msg, workspace={}, figures=[])
+
+            # Try to get memory status even after error
+            try:
+                memory_status = await self.get_memory_status()
+            except Exception:
+                memory_status = None
+
+            return ExecutionResult(
+                output="",
+                error=error_msg,
+                workspace={},
+                figures=[],
+                execution_time_seconds=execution_time,
+                memory_status=memory_status,
+            )
 
     async def cleanup_figures(self) -> None:
         """Clean up MATLAB figures and temporary files."""
