@@ -4,14 +4,43 @@ import asyncio
 import logging
 import os
 import signal
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from mcp.server.fastmcp import Context, FastMCP, Image
 
 from .engine import MatlabEngine
-from .models import CompressionConfig
+from .models import CompressionConfig, FigureData
 from .utils.section_parser import get_section_info
+
+
+def _figure_to_image(fig: FigureData) -> Image:
+    """Convert FigureData to MCP Image, handling both data and file path references.
+
+    Args:
+        fig: FigureData object containing either binary data or file path
+
+    Returns:
+        MCP Image object
+    """
+    if fig.data is not None:
+        # Binary data available - use it directly
+        return Image(data=fig.data, format=fig.format.value)
+    elif fig.file_path is not None:
+        # File path reference - read the file
+        try:
+            with open(fig.file_path, "rb") as f:
+                data = f.read()
+            return Image(data=data, format=fig.format.value)
+        except Exception as e:
+            print(f"Error reading figure file {fig.file_path}: {e}", file=sys.stderr)
+            # Return empty image as fallback
+            return Image(data=b"", format=fig.format.value)
+    else:
+        # No data or file path - return empty image
+        return Image(data=b"", format=fig.format.value)
+
 
 # Configure logging based on debug mode
 debug_mode = os.getenv("MATLAB_MCP_DEBUG", "").lower() in ("true", "1", "yes")
@@ -150,7 +179,7 @@ async def execute_script(
     )
 
     # Convert FigureData to MCP Image objects
-    figures = [Image(data=fig.data, format=fig.format.value) for fig in result.figures]
+    figures = [_figure_to_image(fig) for fig in result.figures]
 
     return {
         "output": result.output,
@@ -196,7 +225,7 @@ async def execute_section(
     )
 
     # Convert FigureData to MCP Image objects
-    figures = [Image(data=fig.data, format=fig.format.value) for fig in result.figures]
+    figures = [_figure_to_image(fig) for fig in result.figures]
 
     return {
         "output": result.output,

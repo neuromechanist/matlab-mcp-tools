@@ -352,17 +352,40 @@ class MatlabEngine:
                     # Get original file size before compression
                     original_size = png_file.stat().st_size
 
-                    # Apply PIL compression
-                    compressed_data = self._compress_png(png_file, compression_config)
-                    compressed_size = len(compressed_data)
+                    if compression_config.use_file_reference:
+                        # Apply compression and save to disk, return file path only
+                        compressed_data = self._compress_png(
+                            png_file, compression_config
+                        )
+                        compressed_size = len(compressed_data)
 
-                    figure_data = FigureData(
-                        data=compressed_data,
-                        format=FigureFormat.PNG,
-                        compression_config=compression_config,
-                        original_size=original_size,
-                        compressed_size=compressed_size,
-                    )
+                        # Save compressed data to new file
+                        compressed_file = self.output_dir / f"figure_{i}_compressed.png"
+                        with open(compressed_file, "wb") as f:
+                            f.write(compressed_data)
+
+                        figure_data = FigureData(
+                            data=None,  # No binary data, use file path instead
+                            file_path=str(compressed_file),
+                            format=FigureFormat.PNG,
+                            compression_config=compression_config,
+                            original_size=original_size,
+                            compressed_size=compressed_size,
+                        )
+                    else:
+                        # Return binary data as before
+                        compressed_data = self._compress_png(
+                            png_file, compression_config
+                        )
+                        compressed_size = len(compressed_data)
+
+                        figure_data = FigureData(
+                            data=compressed_data,
+                            format=FigureFormat.PNG,
+                            compression_config=compression_config,
+                            original_size=original_size,
+                            compressed_size=compressed_size,
+                        )
 
                     figures.append(figure_data)
 

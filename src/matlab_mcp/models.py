@@ -28,6 +28,10 @@ class CompressionConfig(BaseModel):
     optimize_for: str = Field(
         default="size", description="Optimization target: 'size' or 'quality'"
     )
+    use_file_reference: bool = Field(
+        default=False,
+        description="Return file path instead of binary data to reduce bandwidth",
+    )
 
 
 class FigureData(BaseModel):
