@@ -15,6 +15,7 @@ from mcp.server.fastmcp import Context
 
 from .models import (
     ConnectionStatus,
+    EnhancedError,
     ExecutionResult,
     FigureData,
     FigureFormat,
@@ -409,6 +410,9 @@ class MatlabEngine:
             if ctx:
                 ctx.error(error_msg)
 
+            # Create enhanced error information
+            enhanced_error = self._create_enhanced_error(e, script, is_file)
+
             # Try to get memory status even after timeout
             try:
                 memory_status = await self.get_memory_status()
@@ -418,6 +422,7 @@ class MatlabEngine:
             return ExecutionResult(
                 output="",
                 error=error_msg,
+                enhanced_error=enhanced_error,
                 workspace={},
                 figures=[],
                 execution_time_seconds=execution_time,
@@ -430,6 +435,9 @@ class MatlabEngine:
             if ctx:
                 ctx.error(error_msg)
 
+            # Create enhanced error information
+            enhanced_error = self._create_enhanced_error(e, script, is_file)
+
             # Try to get memory status even after error
             try:
                 memory_status = await self.get_memory_status()
@@ -439,6 +447,7 @@ class MatlabEngine:
             return ExecutionResult(
                 output="",
                 error=error_msg,
+                enhanced_error=enhanced_error,
                 workspace={},
                 figures=[],
                 execution_time_seconds=execution_time,
@@ -451,6 +460,9 @@ class MatlabEngine:
             if ctx:
                 ctx.error(error_msg)
 
+            # Create enhanced error information
+            enhanced_error = self._create_enhanced_error(e, script, is_file)
+
             # Try to get memory status even after error
             try:
                 memory_status = await self.get_memory_status()
@@ -460,6 +472,7 @@ class MatlabEngine:
             return ExecutionResult(
                 output="",
                 error=error_msg,
+                enhanced_error=enhanced_error,
                 workspace={},
                 figures=[],
                 execution_time_seconds=execution_time,
@@ -686,6 +699,97 @@ class MatlabEngine:
         """Clean up idle connections in the connection pool."""
         if hasattr(self, "connection_pool"):
             self.connection_pool.cleanup_idle_connections()
+
+    def _create_enhanced_error(
+        self, error: Exception, script: str, is_file: bool = False
+    ) -> Optional[EnhancedError]:
+        """Create enhanced error information with context.
+
+        Args:
+            error: The caught exception
+            script: The executed script or file path
+            is_file: Whether script is a file path
+
+        Returns:
+            EnhancedError with context information, None if enhancement not possible
+        """
+        if not self.config.enable_enhanced_errors:
+            return None
+
+        try:
+            error_type = (
+                "MATLAB"
+                if isinstance(error, matlab.engine.MatlabExecutionError)
+                else "Python"
+            )
+            message = str(error)
+
+            # Try to extract line number from MATLAB error
+            line_number = None
+            if isinstance(error, matlab.engine.MatlabExecutionError):
+                # Look for line number patterns in MATLAB error messages
+                import re
+
+                line_match = re.search(r"line (\d+)", message, re.IGNORECASE)
+                if line_match:
+                    line_number = int(line_match.group(1))
+
+            # Get context lines if we have a script and line number
+            context_lines = []
+            if line_number and is_file and Path(script).exists():
+                try:
+                    with open(script, "r") as f:
+                        lines = f.readlines()
+
+                    # Get 2 lines before and after error line
+                    start_line = max(
+                        0, line_number - 3
+                    )  # -3 because line_number is 1-based
+                    end_line = min(len(lines), line_number + 2)
+
+                    for i in range(start_line, end_line):
+                        prefix = ">>> " if i + 1 == line_number else "    "
+                        context_lines.append(f"{prefix}{i + 1:3d}: {lines[i].rstrip()}")
+
+                except Exception:
+                    context_lines = ["<Could not read script file>"]
+
+            elif line_number and not is_file:
+                # For direct script execution, show the problematic line
+                try:
+                    lines = script.split("\n")
+                    if 0 < line_number <= len(lines):
+                        start_line = max(0, line_number - 3)
+                        end_line = min(len(lines), line_number + 2)
+
+                        for i in range(start_line, end_line):
+                            prefix = ">>> " if i + 1 == line_number else "    "
+                            context_lines.append(
+                                f"{prefix}{i + 1:3d}: {lines[i].rstrip()}"
+                            )
+                except Exception:
+                    context_lines = ["<Could not parse script>"]
+
+            # Get stack trace if available
+            stack_trace = None
+            if hasattr(error, "__traceback__") and error.__traceback__:
+                import traceback
+
+                stack_trace = "".join(
+                    traceback.format_exception(type(error), error, error.__traceback__)
+                )
+
+            return EnhancedError(
+                error_type=error_type,
+                message=message,
+                line_number=line_number,
+                context_lines=context_lines,
+                stack_trace=stack_trace,
+            )
+
+        except Exception as e:
+            print(f"Error creating enhanced error info: {e}", file=sys.stderr)
+            return None
 
     async def execute_section(
         self,
