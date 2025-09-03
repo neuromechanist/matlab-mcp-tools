@@ -23,87 +23,96 @@ A Model Context Protocol (MCP) server that provides tools for developing and run
 
 ## Installation
 
-### Using uv and pip (Recommended)
+### Quick Start (Recommended)
 
-1. Clone this repository:
+**One-command installation with auto-detection:**
+
+```bash
+./install-matlab-mcp.sh
+```
+
+That's it! The installer will:
+- ✅ **Auto-detect MATLAB installations** (including external volumes like `/Volumes/S1/`)
+- ✅ **Auto-install UV** package manager if needed
+- ✅ **Create optimized virtual environment** with MATLAB-compatible Python version
+- ✅ **Install all dependencies** including MATLAB Python engine
+- ✅ **Generate MCP configuration** ready for Cursor/Claude Code
+- ✅ **Verify installation** works correctly
+- ✅ **Optionally configure Cursor** automatically
+
+**Reduces installation time from 15+ minutes to ~2 minutes!**
+
+### Advanced Installation
+
+If you need custom configuration:
+
+1. **Clone this repository:**
 
 ```bash
 git clone [repository-url]
 cd matlab-mcp-tools
 ```
 
-2. Install uv if you don't have it yet:
+2. **Set custom MATLAB path** (optional - installer auto-detects):
+
+```bash
+# Only needed if MATLAB is in unusual location
+export MATLAB_PATH=/path/to/your/matlab/installation
+```
+
+3. **Run installer:**
+
+```bash
+./install-matlab-mcp.sh
+```
+
+### Legacy Installation (Manual)
+
+<details>
+<summary>Click to expand legacy manual installation steps</summary>
+
+1. Install uv package manager:
 
 ```bash
 # Install uv using Homebrew
 brew install uv
-```
-
-```bash
-# Install uv using pip
+# OR install using pip
 pip install uv
 ```
 
-Alternatively, you can install `uv` by installing this repository as a development dependency:
+2. Set MATLAB path environment variable:
 
 ```bash
-pip install -e ".[dev]"
+# For macOS (auto-detection searches common locations)
+export MATLAB_PATH=/Applications/MATLAB_R2024b.app
+
+# For Windows (use Git Bash terminal)
+export MATLAB_PATH="C:/Program Files/MATLAB/R2024b"
 ```
 
-3. Set the MATLAB path environment variable if your MATLAB is not in the default location:
-
-```bash
-# For macOS (default is /Applications/MATLAB_R2024b.app)
-export MATLAB_PATH=/path/to/your/matlab/installation
-
-# For Windows use Git Bash terminal (default might be C:\Program Files\MATLAB\R2024b)
-# Also use forward slashes and double quotes for paths with spaces
-# export MATLAB_PATH="C:/path/to/your/matlab/installation"
-```
-
-4. Run the setup script to create a virtual environment and install the package:
+3. Run legacy setup script:
 
 ```bash
 ./setup-matlab-mcp.sh
 ```
 
-The setup script will:
-- Check if uv is installed
-- Create a virtual environment in `.venv` directory
-- Install the MATLAB Engine Python package
-- Install the matlab-mcp-server package in development mode
-- Generate an MCP configuration file
-
-5. Configure Cline/Cursor by copying the provided MCP configuration:
+4. Configure Cursor manually:
 
 ```bash
-# For macOS/Linux
-cp mcp-config.json ~/.cursor/mcp.json
-
-# For Windows
-# copy mcp-config.json %USERPROFILE%\.cursor\mcp.json
+cp mcp-pip.json ~/.cursor/mcp.json
 ```
 
-6. Test the installation:
+</details>
+
+### Testing Installation
+
+Test your installation:
 
 ```bash
 ./test-matlab-mcp.sh
 ```
 
-After setup, you can run the MATLAB MCP server using:
-
-```bash
-matlab-mcp-server
-```
-
-If the server is not found, check whether the server is installed in the virtual environment:
-
-```bash
-./.venv/bin/matlab-mcp-server
-```
-
-
-Troubleshooting: See [Installation Troubleshooting](#installation-troubleshooting) for common issues and solutions. Don't hesitate to open an issue on the repository if you encounter an issue that is not listed, and a PR if you have a solution.
+**Installation complete!** The MATLAB MCP server is now ready to use with Cursor/Claude Code.
 
 ## Usage
 
@@ -283,24 +292,56 @@ The tool creates `matlab_output` and `test_output` directories to store:
 
 ## Installation Troubleshooting
 
-1. Note that the `setup-matlab-mcp.sh` script is designed to be run from the root of the repository.
-2. The script is dependent on `uv` being installed. So make sure you have it installed (`pip install uv`).
-3. If the scripts run, but you get an ENONET error, make sure that the Python executable used to run the install script is the same Python executable that Cline/Cursor is using. Otherwise, you can specify the Python executable in the MCP configuration file within the `command` and `args` keys. For example:
+The new `install-matlab-mcp.sh` installer handles most common issues automatically. If you encounter problems:
+
+### Common Issues and Solutions
+
+**1. MATLAB not found:**
+- The installer auto-detects MATLAB in common locations
+- If you have MATLAB in unusual location: `export MATLAB_PATH=/your/matlab/path`
+- Supported locations include external volumes (e.g., `/Volumes/S1/Applications/`)
+
+**2. UV package manager issues:**
+- The installer automatically installs UV if needed
+- For manual installation: `curl -LsSf https://astral.sh/uv/install.sh | sh`
+
+**3. Python version compatibility:**
+- Installer automatically selects MATLAB-compatible Python version
+- MATLAB R2024b: Python 3.11, R2024a: Python 3.10, R2023x: Python 3.9
+
+**4. Permission errors:**
+- Run installer with appropriate permissions
+- On Windows: use Git Bash with Admin privileges
+
+**5. Configuration issues:**
+- Use the auto-generated `mcp-pip.json` configuration
+- Installer offers automatic Cursor configuration
+
+### Legacy Issues (if using manual installation)
+
+<details>
+<summary>Click for legacy troubleshooting</summary>
+
+1. Make sure `uv` is installed before running legacy scripts
+2. For ENONET errors, ensure Python executable consistency:
 
 ```json
 {
-      "command": "bash",
-      "args": ["-c", "source $(conda info --base)/etc/profile.d/conda.sh && conda activate target_environment && /path/to/your/matlab-mcp-tools/.venv/bin/matlab-mcp-server"],
+    "command": "bash",
+    "args": ["-c", "source ~/.zshrc && /path/to/matlab-mcp-install/.venv/bin/matlab-mcp-server"]
 }
 ```
 
-In this case, if you're using Conda, replace `target_environment` with the name of your Conda environment.
+3. MATLAB Python Engine compatibility: See [MATLAB Engine docs](https://www.mathworks.com/help/matlab/matlab-engine-for-python.html)
 
-4. Running the `setup-matlab-mcp.sh` in Windows requires using Git Bash terminal with ADMIN privileges. This is because the script needs to install the `matlab-mcp-tools` package and this may require admin privileges.
+</details>
 
-5. Matlab Python Engine requires specific versions of Python and MATLAB. See the [Matlab Python Engine](https://www.mathworks.com/help/matlab/matlab-engine-for-python.html) and the [Python Versions Compatibility](https://www.mathworks.com/support/requirements/python-compatibility.html) documentations for more information.
+### Still Having Issues?
 
-6. Matlab requires a license to be running to use the Python Engine.
+1. **Check installer output** for specific error messages
+2. **Verify MATLAB license** is valid and active  
+3. **Test manually**: `.venv/bin/matlab-mcp-server --help`
+4. **Open an issue** with installer output if problem persists
 
 ## Contributing
 
