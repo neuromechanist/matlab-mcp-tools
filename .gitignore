@@ -65,7 +65,8 @@ coverage/
 CLAUDE.md
 .context/
 .rules
-.serena/coverage.xml
+.serena/
+coverage.xml
 .coverage
 .env
 codecov
