@@ -23,7 +23,7 @@ from .models import (
     MemoryStatus,
     PerformanceConfig,
 )
-from .utils.section_parser import extract_section
+from .utils.section_parser import extract_section, parse_sections
 
 
 class VariableRetrievalConfig:
@@ -1492,6 +1492,174 @@ class MatlabEngine:
         return await self.execute(
             section_code, is_file=False, capture_plots=capture_plots, ctx=ctx
         )
+
+    async def execute_section_by_index(
+        self,
+        file_path: str,
+        section_index: int,
+        maintain_workspace: bool = True,
+        capture_plots: bool = True,
+        ctx: Optional[Context] = None,
+    ) -> ExecutionResult:
+        """Execute a specific section of a MATLAB script by its index.
+
+        Args:
+            file_path: Path to the MATLAB script (absolute or relative)
+            section_index: 0-based index of the section to execute
+            maintain_workspace: Whether to maintain workspace between sections
+            capture_plots: Whether to capture generated plots
+            ctx: MCP context for progress reporting
+
+        Returns:
+            ExecutionResult containing output, workspace state, and figures
+        """
+        script_path = Path(file_path)
+        if not script_path.exists():
+            raise FileNotFoundError(f"Script not found: {file_path}")
+
+        # Parse sections from the file
+        sections = parse_sections(script_path)
+
+        if not sections:
+            raise ValueError(f"No sections found in {file_path}")
+
+        if section_index < 0 or section_index >= len(sections):
+            raise IndexError(
+                f"Section index {section_index} out of range. "
+                f"Script has {len(sections)} section(s) (0 to {len(sections) - 1})."
+            )
+
+        start_line, end_line, title = sections[section_index]
+
+        if ctx:
+            ctx.info(
+                f"Executing section {section_index}: '{title}' (lines {start_line}-{end_line})"
+            )
+
+        return await self.execute_section(
+            file_path,
+            (start_line, end_line),
+            maintain_workspace=maintain_workspace,
+            capture_plots=capture_plots,
+            ctx=ctx,
+        )
+
+    async def execute_section_by_title(
+        self,
+        file_path: str,
+        section_title: str,
+        maintain_workspace: bool = True,
+        capture_plots: bool = True,
+        ctx: Optional[Context] = None,
+    ) -> ExecutionResult:
+        """Execute a specific section of a MATLAB script by its title.
+
+        Args:
+            file_path: Path to the MATLAB script (absolute or relative)
+            section_title: Title of the section to execute (case-insensitive partial match)
+            maintain_workspace: Whether to maintain workspace between sections
+            capture_plots: Whether to capture generated plots
+            ctx: MCP context for progress reporting
+
+        Returns:
+            ExecutionResult containing output, workspace state, and figures
+        """
+        script_path = Path(file_path)
+        if not script_path.exists():
+            raise FileNotFoundError(f"Script not found: {file_path}")
+
+        # Parse sections from the file
+        sections = parse_sections(script_path)
+
+        if not sections:
+            raise ValueError(f"No sections found in {file_path}")
+
+        # Find section by title (case-insensitive partial match)
+        search_title = section_title.lower().strip()
+        matching_sections = []
+
+        for idx, (start_line, end_line, title) in enumerate(sections):
+            if search_title in title.lower():
+                matching_sections.append((idx, start_line, end_line, title))
+
+        if not matching_sections:
+            section_titles = [s[2] for s in sections]
+            raise ValueError(
+                f"No section matching '{section_title}' found. "
+                f"Available sections: {section_titles}"
+            )
+
+        if len(matching_sections) > 1:
+            matches = [m[3] for m in matching_sections]
+            raise ValueError(
+                f"Multiple sections match '{section_title}': {matches}. "
+                "Please be more specific."
+            )
+
+        idx, start_line, end_line, title = matching_sections[0]
+
+        if ctx:
+            ctx.info(
+                f"Executing section {idx}: '{title}' (lines {start_line}-{end_line})"
+            )
+
+        return await self.execute_section(
+            file_path,
+            (start_line, end_line),
+            maintain_workspace=maintain_workspace,
+            capture_plots=capture_plots,
+            ctx=ctx,
+        )
+
+    async def get_script_sections(self, file_path: str) -> list[dict]:
+        """Get information about sections in a MATLAB script.
+
+        Args:
+            file_path: Path to the MATLAB script (absolute or relative)
+
+        Returns:
+            List of dictionaries with section information:
+            [
+                {
+                    "index": 0,
+                    "title": "Section Title",
+                    "start_line": 0,
+                    "end_line": 15,
+                    "preview": "x = linspace(0, 10, 100);"
+                },
+                ...
+            ]
+        """
+        script_path = Path(file_path)
+        if not script_path.exists():
+            raise FileNotFoundError(f"Script not found: {file_path}")
+
+        sections = parse_sections(script_path)
+
+        with open(script_path) as f:
+            lines = f.readlines()
+
+        section_info = []
+        for idx, (start, end, title) in enumerate(sections):
+            # Find first non-comment line for preview
+            preview = ""
+            for line in lines[start : end + 1]:
+                stripped = line.strip()
+                if stripped and not stripped.startswith("%"):
+                    preview = stripped[:80]  # Limit preview length
+                    break
+
+            section_info.append(
+                {
+                    "index": idx,
+                    "title": title,
+                    "start_line": start,
+                    "end_line": end,
+                    "preview": preview,
+                }
+            )
+
+        return section_info
 
     def close(self) -> None:
         """Clean up MATLAB engine and resources."""

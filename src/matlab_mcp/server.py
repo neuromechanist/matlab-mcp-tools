@@ -12,7 +12,6 @@ from mcp.server.fastmcp import Context, FastMCP, Image
 
 from .engine import MatlabEngine
 from .models import CompressionConfig, FigureData
-from .utils.section_parser import get_section_info
 
 
 def _figure_to_image(fig: FigureData) -> Image:
@@ -191,14 +190,22 @@ async def execute_script(
 
 @mcp.tool()
 async def execute_section(
-    script_name: str,
+    file_path: str,
     section_range: Tuple[int, int],
     maintain_workspace: bool = True,
     capture_plots: bool = True,
     ctx: Optional[Context] = None,
 ) -> Dict[str, Any]:
-    """Execute a specific section of a MATLAB script.
-    To use this tool, you should first the use the `get_script_sections` tool to get the section ranges.
+    """Execute a specific section of a MATLAB script by line range.
+
+    Consider using execute_section_by_index or execute_section_by_title for
+    easier section selection. Use get_script_sections to see available sections.
+
+    Args:
+        file_path: Full path to the MATLAB script (or script name in ~/.mcp/matlab/scripts/)
+        section_range: Tuple of (start_line, end_line) for the section (0-based)
+        maintain_workspace: Whether to maintain workspace between sections
+        capture_plots: Whether to capture generated plots
 
     Returns a dictionary containing:
     - output: Section execution output
@@ -209,9 +216,17 @@ async def execute_section(
     server = MatlabServer.get_instance()
     await server.initialize()
 
-    script_path = server.scripts_dir / f"{script_name}"
+    # Support both full paths and script names in scripts_dir
+    script_path = Path(file_path)
+    if not script_path.is_absolute():
+        # Try scripts_dir first
+        scripts_path = server.scripts_dir / file_path
+        if scripts_path.exists():
+            script_path = scripts_path
+        # Otherwise treat as relative to cwd
+
     if not script_path.exists():
-        raise FileNotFoundError(f"Script {script_name} not found")
+        raise FileNotFoundError(f"Script not found: {file_path}")
 
     if ctx:
         ctx.info(f"Executing section (lines {section_range[0]}-{section_range[1]})")
@@ -219,6 +234,134 @@ async def execute_section(
     result = await server.engine.execute_section(
         str(script_path),
         section_range,
+        maintain_workspace=maintain_workspace,
+        capture_plots=capture_plots,
+        ctx=ctx,
+    )
+
+    # Convert FigureData to MCP Image objects
+    figures = [_figure_to_image(fig) for fig in result.figures]
+
+    return {
+        "output": result.output,
+        "error": result.error,
+        "workspace": result.workspace,
+        "figures": figures,
+    }
+
+
+@mcp.tool()
+async def execute_section_by_index(
+    file_path: str,
+    section_index: int,
+    maintain_workspace: bool = True,
+    capture_plots: bool = True,
+    ctx: Optional[Context] = None,
+) -> Dict[str, Any]:
+    """Execute a specific section of a MATLAB script by its index.
+
+    This is the recommended way to execute sections. Use get_script_sections
+    first to see available sections and their indices.
+
+    Args:
+        file_path: Full path to the MATLAB script (or script name in ~/.mcp/matlab/scripts/)
+        section_index: 0-based index of the section to execute
+        maintain_workspace: Whether to maintain workspace between sections
+        capture_plots: Whether to capture generated plots
+
+    Examples:
+        - execute_section_by_index("/path/to/script.m", 0)
+          Execute the first section
+
+        - execute_section_by_index("my_script.m", 2)
+          Execute the third section of my_script.m in scripts directory
+
+    Returns a dictionary containing:
+    - output: Section execution output
+    - error: Error message if any
+    - workspace: Current workspace variables
+    - figures: List of generated plots
+    """
+    server = MatlabServer.get_instance()
+    await server.initialize()
+
+    # Support both full paths and script names in scripts_dir
+    script_path = Path(file_path)
+    if not script_path.is_absolute():
+        scripts_path = server.scripts_dir / file_path
+        if scripts_path.exists():
+            script_path = scripts_path
+
+    if ctx:
+        ctx.info(f"Executing section index {section_index}")
+
+    result = await server.engine.execute_section_by_index(
+        str(script_path),
+        section_index,
+        maintain_workspace=maintain_workspace,
+        capture_plots=capture_plots,
+        ctx=ctx,
+    )
+
+    # Convert FigureData to MCP Image objects
+    figures = [_figure_to_image(fig) for fig in result.figures]
+
+    return {
+        "output": result.output,
+        "error": result.error,
+        "workspace": result.workspace,
+        "figures": figures,
+    }
+
+
+@mcp.tool()
+async def execute_section_by_title(
+    file_path: str,
+    section_title: str,
+    maintain_workspace: bool = True,
+    capture_plots: bool = True,
+    ctx: Optional[Context] = None,
+) -> Dict[str, Any]:
+    """Execute a specific section of a MATLAB script by its title.
+
+    Finds and executes the section whose title contains the given string
+    (case-insensitive partial match).
+
+    Args:
+        file_path: Full path to the MATLAB script (or script name in ~/.mcp/matlab/scripts/)
+        section_title: Title or partial title of the section to execute
+        maintain_workspace: Whether to maintain workspace between sections
+        capture_plots: Whether to capture generated plots
+
+    Examples:
+        - execute_section_by_title("/path/to/script.m", "Load Data")
+          Execute the section titled "Load Data" or "Load Data from File", etc.
+
+        - execute_section_by_title("analysis.m", "plot")
+          Execute the section with "plot" in its title
+
+    Returns a dictionary containing:
+    - output: Section execution output
+    - error: Error message if any
+    - workspace: Current workspace variables
+    - figures: List of generated plots
+    """
+    server = MatlabServer.get_instance()
+    await server.initialize()
+
+    # Support both full paths and script names in scripts_dir
+    script_path = Path(file_path)
+    if not script_path.is_absolute():
+        scripts_path = server.scripts_dir / file_path
+        if scripts_path.exists():
+            script_path = scripts_path
+
+    if ctx:
+        ctx.info(f"Finding and executing section: '{section_title}'")
+
+    result = await server.engine.execute_section_by_title(
+        str(script_path),
+        section_title,
         maintain_workspace=maintain_workspace,
         capture_plots=capture_plots,
         ctx=ctx,
@@ -393,26 +536,48 @@ async def list_workspace_variables(
 
 @mcp.tool()
 async def get_script_sections(
-    script_name: str, ctx: Optional[Context] = None
+    file_path: str, ctx: Optional[Context] = None
 ) -> List[Dict[str, Any]]:
     """Get information about sections in a MATLAB script.
 
+    Use this tool before execute_section_by_index or execute_section_by_title
+    to see what sections are available.
+
+    Args:
+        file_path: Full path to the MATLAB script (or script name in ~/.mcp/matlab/scripts/)
+
     Returns a list of dictionaries containing:
-    - start_line: Section start line number
-    - end_line: Section end line number
-    - title: Section title if any
+    - index: Section index (0-based) for use with execute_section_by_index
+    - title: Section title for use with execute_section_by_title
+    - start_line: Section start line number (0-based)
+    - end_line: Section end line number (0-based)
+    - preview: First non-comment line of the section
+
+    Examples:
+        - get_script_sections("/path/to/analysis.m")
+          Returns sections from any MATLAB script
+
+        - get_script_sections("my_script.m")
+          Returns sections from script in ~/.mcp/matlab/scripts/
     """
     server = MatlabServer.get_instance()
     await server.initialize()
 
-    script_path = server.scripts_dir / f"{script_name}"
+    # Support both full paths and script names in scripts_dir
+    script_path = Path(file_path)
+    if not script_path.is_absolute():
+        scripts_path = server.scripts_dir / file_path
+        if scripts_path.exists():
+            script_path = scripts_path
+
     if not script_path.exists():
-        raise FileNotFoundError(f"Script {script_name}not found")
+        raise FileNotFoundError(f"Script not found: {file_path}")
 
     if ctx:
-        ctx.info(f"Getting sections for script: {script_name}")
+        ctx.info(f"Getting sections for script: {file_path}")
 
-    return get_section_info(script_path)
+    # Use the engine's method for consistency
+    return await server.engine.get_script_sections(str(script_path))
 
 
 @mcp.tool()
