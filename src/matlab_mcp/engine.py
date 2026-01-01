@@ -849,9 +849,13 @@ class MatlabEngine:
                         if total_elements <= SMALL_THRESHOLD:
                             # Small arrays: return full data (current behavior)
                             if len(size) == 2 and (size[0] == 1 or size[1] == 1):
-                                workspace[var] = value._data.tolist()
+                                # Handle different _data types
+                                if hasattr(value._data, "tolist"):
+                                    workspace[var] = value._data.tolist()
+                                else:
+                                    workspace[var] = list(value._data)
                             else:
-                                workspace[var] = [row.tolist() for row in value]
+                                workspace[var] = [list(row) for row in value]
 
                         elif total_elements <= MEDIUM_THRESHOLD:
                             # Medium arrays: return summary with statistics
