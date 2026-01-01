@@ -65,4 +65,5 @@ coverage/
 CLAUDE.md
 .context/
 .rules
-.serena/
+.serena/coverage.xml
+.coverage
