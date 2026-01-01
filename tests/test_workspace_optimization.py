@@ -10,6 +10,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict
 
+import pytest
+
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
@@ -29,6 +31,7 @@ def measure_json_size(data: Dict[str, Any]) -> tuple[int, int]:
     return byte_size, estimated_tokens
 
 
+@pytest.mark.asyncio
 async def test_current_implementation():
     """Test current workspace implementation with various array sizes."""
     print("=== Testing Current Workspace Implementation ===")
@@ -81,6 +84,7 @@ async def test_current_implementation():
     return results
 
 
+@pytest.mark.asyncio
 async def test_matrix_sizes():
     """Test various matrix sizes to understand scaling."""
     print("\n=== Matrix Size Scaling Analysis ===")

@@ -8,6 +8,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
@@ -27,6 +29,7 @@ def measure_json_size(data: dict) -> tuple[int, int]:
     return byte_size, estimated_tokens
 
 
+@pytest.mark.asyncio
 async def test_different_data_types():
     """Test optimization with various MATLAB data types."""
     print("=== Testing Different MATLAB Data Types ===")
@@ -107,6 +110,7 @@ async def test_different_data_types():
     return results
 
 
+@pytest.mark.asyncio
 async def test_configurable_thresholds():
     """Test optimization with different threshold configurations."""
     print("\n\n=== Testing Configurable Thresholds ===")

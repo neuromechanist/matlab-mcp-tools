@@ -86,8 +86,12 @@ class TestSelectiveVariableRetrieval:
         # Check that we got metadata, not actual data
         if "data" in info:
             data_info = info["data"]
-            # Should have size info
-            assert "size" in data_info or "numel" in data_info
+            # Should have size info (using var_size/var_numel to avoid MATLAB reserved names)
+            assert (
+                "var_size" in data_info
+                or "var_numel" in data_info
+                or "bytes" in data_info
+            )
             # Should NOT have actual array values
             assert not isinstance(data_info, list)
 

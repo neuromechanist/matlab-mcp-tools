@@ -12,6 +12,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
@@ -19,6 +21,7 @@ from matlab_mcp.engine import MatlabEngine
 from matlab_mcp.models import CompressionConfig
 
 
+@pytest.mark.asyncio
 async def test_compression_scenarios():
     """Test different compression scenarios and measure performance."""
 
