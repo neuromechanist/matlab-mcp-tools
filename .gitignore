@@ -67,3 +67,5 @@ CLAUDE.md
 .rules
 .serena/coverage.xml
 .coverage
+.env
+codecov

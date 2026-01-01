@@ -9,6 +9,11 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 cd "$PROJECT_ROOT"
 
+# Load environment variables from .env if it exists
+if [[ -f ".env" ]]; then
+    export $(grep -v '^#' .env | xargs)
+fi
+
 # Set MATLAB path if not already set
 export MATLAB_PATH="${MATLAB_PATH:-/Volumes/S1/Applications/MATLAB_R2025b.app}"
 
