@@ -1041,43 +1041,89 @@ class MatlabEngine:
             List of dictionaries with variable info
         """
         await self.initialize()
+        import re
 
         try:
-            # Build the mcp_var_info call
-            pattern_arg = f"'{pattern}'" if pattern else "''"
-            type_arg = f"'{var_type}'" if var_type else "''"
+            # Get variable names using who (returns cell array of names)
+            var_names = self.eng.eval("who", nargout=1)
 
-            result = self.eng.eval(
-                f"mcp_var_info({pattern_arg}, {type_arg})", nargout=1
-            )
-
-            if not result:
+            if not var_names:
                 return []
 
-            # Convert to list of dicts
             variables = []
 
-            # Handle struct array from MATLAB
-            if hasattr(result, "_fieldnames"):
-                # Single struct - check if it's a struct array
-                if hasattr(result, "__len__") and len(result) > 1:
-                    # Struct array
-                    for i in range(len(result)):
-                        item = result[i]
-                        var_info = self._extract_var_info(item)
-                        if var_info:
-                            variables.append(var_info)
-                else:
-                    # Single struct
-                    var_info = self._extract_var_info(result)
-                    if var_info:
-                        variables.append(var_info)
-            elif hasattr(result, "__len__") and len(result) > 0:
-                # List/array of results
-                for item in result:
-                    var_info = self._extract_var_info(item)
-                    if var_info:
-                        variables.append(var_info)
+            for name in var_names:
+                # Apply pattern filter early
+                if pattern:
+                    if not re.search(pattern, name):
+                        continue
+
+                # Get variable info individually
+                try:
+                    var_class = self.eng.eval(f"class({name})", nargout=1)
+
+                    # Apply type filter
+                    if var_type:
+                        if var_class.lower() != var_type.lower():
+                            continue
+
+                    # Get size
+                    size_result = self.eng.eval(f"size({name})", nargout=1)
+                    size = (
+                        list(size_result._data)
+                        if hasattr(size_result, "_data")
+                        else list(size_result)
+                    )
+
+                    # Estimate bytes based on size and type
+                    bytes_val = 0
+                    try:
+                        numel = self.eng.eval(f"numel({name})", nargout=1)
+                        # Estimate bytes per element based on type
+                        bytes_per_element = {
+                            "double": 8,
+                            "single": 4,
+                            "int64": 8,
+                            "uint64": 8,
+                            "int32": 4,
+                            "uint32": 4,
+                            "int16": 2,
+                            "uint16": 2,
+                            "int8": 1,
+                            "uint8": 1,
+                            "logical": 1,
+                            "char": 2,
+                        }.get(var_class, 8)
+                        bytes_val = int(numel * bytes_per_element)
+                    except Exception:
+                        pass
+
+                    var_info = {
+                        "name": name,
+                        "class": var_class,
+                        "size": size,
+                        "bytes": bytes_val,
+                        "is_struct": var_class == "struct",
+                        "is_numeric": var_class
+                        in [
+                            "double",
+                            "single",
+                            "int8",
+                            "int16",
+                            "int32",
+                            "int64",
+                            "uint8",
+                            "uint16",
+                            "uint32",
+                            "uint64",
+                        ],
+                        "is_cell": var_class == "cell",
+                    }
+                    variables.append(var_info)
+
+                except Exception:
+                    # Skip variables that can't be queried
+                    continue
 
             return variables
 
@@ -1236,13 +1282,38 @@ class MatlabEngine:
         """Convert struct info from MATLAB to Python dict.
 
         Args:
-            info: MATLAB struct info from mcp_struct_info
+            info: MATLAB struct info from mcp_struct_info (dict or struct)
 
         Returns:
             Dictionary with field information
         """
+        import matlab
+
         result = {}
 
+        # Handle dict (common case with newer MATLAB engine)
+        if isinstance(info, dict):
+            for field_name, field_data in info.items():
+                if isinstance(field_data, dict):
+                    field_info = {}
+                    for prop, val in field_data.items():
+                        if isinstance(val, str):
+                            field_info[prop] = val
+                        elif isinstance(val, matlab.double):
+                            # Convert matlab.double to list
+                            field_info[prop] = list(val._data)
+                        elif isinstance(val, (int, float, bool)):
+                            field_info[prop] = val
+                        elif isinstance(val, list):
+                            field_info[prop] = val
+                        else:
+                            field_info[prop] = str(val)
+                    result[field_name] = field_info
+                else:
+                    result[field_name] = str(field_data)
+            return result
+
+        # Handle MATLAB struct with _fieldnames (older MATLAB engine)
         if hasattr(info, "_fieldnames"):
             for field in info._fieldnames:
                 field_data = getattr(info, field)
@@ -1261,6 +1332,8 @@ class MatlabEngine:
                             field_info[prop] = val
                         else:
                             field_info[prop] = str(val)
+                elif isinstance(field_data, dict):
+                    field_info = self._convert_struct_info({"_": field_data})["_"]
 
                 result[field] = field_info
 
