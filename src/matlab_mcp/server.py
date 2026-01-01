@@ -241,6 +241,7 @@ async def get_workspace(ctx: Optional[Context] = None) -> Dict[str, Any]:
 
     Returns a dictionary mapping variable names to their values.
     Complex MATLAB types are converted to Python types where possible.
+    Large arrays return summaries with statistics instead of full data.
     """
     server = MatlabServer.get_instance()
     await server.initialize()
@@ -249,6 +250,145 @@ async def get_workspace(ctx: Optional[Context] = None) -> Dict[str, Any]:
         ctx.info("Fetching MATLAB workspace")
 
     return await server.engine.get_workspace()
+
+
+@mcp.tool()
+async def get_variable(
+    name: str,
+    fields: Optional[List[str]] = None,
+    depth: int = 1,
+    max_elements: int = 100,
+    ctx: Optional[Context] = None,
+) -> Dict[str, Any]:
+    """Get a specific MATLAB variable with selective retrieval.
+
+    This is the preferred way to access complex structs like EEGLAB's EEG.
+    Instead of transferring the entire struct, you can:
+    - Request only specific fields
+    - Control the depth of nested struct retrieval
+    - Limit array sizes to prevent token explosion
+
+    Args:
+        name: Variable name. Can include field access like "EEG.chanlocs"
+        fields: List of specific fields to retrieve (for structs only)
+        depth: Retrieval depth. 0=info only (field names), 1=values, 2+=nested
+        max_elements: Maximum array elements to transfer (default 100)
+
+    Examples:
+        - get_variable("EEG", fields=["nbchan", "srate", "pnts"])
+          Returns only the scalar properties, not the huge data array
+
+        - get_variable("EEG.chanlocs", depth=0)
+          Returns field names of chanlocs without values
+
+        - get_variable("EEG.event", fields=["type", "latency"], max_elements=10)
+          Returns first 10 events with only type and latency fields
+    """
+    server = MatlabServer.get_instance()
+    await server.initialize()
+
+    if ctx:
+        ctx.info(f"Getting variable: {name}")
+
+    return await server.engine.get_variable(
+        name=name,
+        fields=fields,
+        depth=depth,
+        max_elements=max_elements,
+    )
+
+
+@mcp.tool()
+async def get_struct_info(
+    var_name: str,
+    ctx: Optional[Context] = None,
+) -> Dict[str, Any]:
+    """Get struct field information without transferring values.
+
+    Essential for exploring unknown MATLAB structs before deciding
+    which fields to retrieve. Returns field names, types, sizes,
+    and memory usage for each field.
+
+    Args:
+        var_name: Name of the struct variable (e.g., "EEG" or "EEG.chanlocs")
+
+    Returns:
+        Dictionary with field information:
+        {
+            "field_name": {
+                "class": "double",
+                "size": [32, 30504],
+                "numel": 976128,
+                "bytes": 7809024,
+                "is_struct": false,
+                "is_numeric": true
+            },
+            ...
+        }
+
+    Example:
+        info = get_struct_info("EEG")
+        # Now you know EEG.data is huge but EEG.nbchan is small
+        # Use get_variable("EEG", fields=["nbchan", "srate"]) for small fields
+    """
+    server = MatlabServer.get_instance()
+    await server.initialize()
+
+    if ctx:
+        ctx.info(f"Getting struct info for: {var_name}")
+
+    return await server.engine.get_struct_info(var_name)
+
+
+@mcp.tool()
+async def list_workspace_variables(
+    pattern: Optional[str] = None,
+    var_type: Optional[str] = None,
+    ctx: Optional[Context] = None,
+) -> List[Dict[str, Any]]:
+    """List workspace variables with optional filtering.
+
+    Useful for discovering what variables exist without retrieving them.
+    Supports regex pattern matching and type filtering.
+
+    Args:
+        pattern: Regex pattern to filter variable names (e.g., "^EEG" for EEG*)
+        var_type: Filter by MATLAB class (e.g., "struct", "double", "cell")
+
+    Returns:
+        List of variable info dictionaries:
+        [
+            {
+                "name": "EEG",
+                "class": "struct",
+                "size": [1, 1],
+                "bytes": 15000000,
+                "is_struct": true,
+                "is_numeric": false
+            },
+            ...
+        ]
+
+    Examples:
+        - list_workspace_variables(pattern="^EEG")
+          List all variables starting with "EEG"
+
+        - list_workspace_variables(var_type="struct")
+          List all struct variables
+
+        - list_workspace_variables(pattern="data", var_type="double")
+          List all numeric arrays with "data" in the name
+    """
+    server = MatlabServer.get_instance()
+    await server.initialize()
+
+    if ctx:
+        ctx.info("Listing workspace variables")
+
+    return await server.engine.list_workspace_variables(
+        pattern=pattern,
+        var_type=var_type,
+    )
 
 
 @mcp.tool()
