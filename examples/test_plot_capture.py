@@ -2,21 +2,21 @@
 
 import asyncio
 import os
+import sys
 import traceback
 from pathlib import Path
-import sys
 
 # Add src directory to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from matlab_mcp.server import MatlabServer
 from matlab_mcp.models import FigureFormat
+from matlab_mcp.server import MatlabServer
 
 
 async def test_plot_capture():
     """Test plot capture in both PNG and SVG formats."""
     # Set MATLAB environment
-    matlab_path = os.getenv('MATLAB_PATH', '/Applications/MATLAB_R2024a.app')
+    matlab_path = os.getenv("MATLAB_PATH", "/Applications/MATLAB_R2024a.app")
     print(f"MATLAB_PATH: {matlab_path}")
 
     # Ask user for correct MATLAB path if default doesn't exist
@@ -30,7 +30,7 @@ async def test_plot_capture():
         if not os.path.exists(matlab_path):
             print(f"Path {matlab_path} does not exist, exiting...")
             return
-        os.environ['MATLAB_PATH'] = matlab_path
+        os.environ["MATLAB_PATH"] = matlab_path
         print(f"Set MATLAB_PATH to: {matlab_path}")
 
     server = MatlabServer()
@@ -49,9 +49,7 @@ async def test_plot_capture():
 
         print(f"Executing script: {script_path}")
         result = await server.engine.execute(
-            str(script_path),
-            is_file=True,
-            capture_plots=True
+            str(script_path), is_file=True, capture_plots=True
         )
 
         if result.error:
@@ -75,7 +73,7 @@ async def test_plot_capture():
             output_file.write_bytes(fig.data)
             print(f"Saved {output_file}")
 
-    except Exception as e:
+    except Exception:
         print("Error during execution:")
         print(traceback.format_exc())
 

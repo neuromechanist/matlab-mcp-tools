@@ -26,6 +26,22 @@ from .models import (
 from .utils.section_parser import extract_section
 
 
+class VariableRetrievalConfig:
+    """Configuration for selective variable retrieval."""
+
+    def __init__(
+        self,
+        fields: list[str] | None = None,
+        depth: int = 1,
+        max_elements: int = 100,
+        include_stats: bool = True,
+    ):
+        self.fields = fields  # Specific fields to retrieve (for structs)
+        self.depth = depth  # 0=info only, 1=values, 2+=nested
+        self.max_elements = max_elements  # Max array elements to transfer
+        self.include_stats = include_stats  # Include statistics for large arrays
+
+
 class WorkspaceConfig:
     """Configuration for workspace data transfer optimization."""
 
@@ -159,8 +175,10 @@ class MatlabEngine:
         # Use .mcp directory in home for all outputs
         self.mcp_dir = Path.home() / ".mcp"
         self.output_dir = self.mcp_dir / "matlab" / "output"
+        self.helpers_dir = self.mcp_dir / "matlab" / "helpers"
         self.output_dir.parent.mkdir(parents=True, exist_ok=True)
         self.output_dir.mkdir(exist_ok=True)
+        self.helpers_dir.mkdir(exist_ok=True)
         self.matlab_path = os.getenv("MATLAB_PATH", "/Applications/MATLAB_R2024b.app")
 
         # Workspace optimization configuration
@@ -235,6 +253,14 @@ class MatlabEngine:
                     f"Adding current directory to MATLAB path: {cwd}", file=sys.stderr
                 )
                 self.eng.addpath(cwd, nargout=0)
+
+                # Add MCP helpers to MATLAB path
+                helpers_path = str(self.helpers_dir)
+                print(
+                    f"Adding MCP helpers to MATLAB path: {helpers_path}",
+                    file=sys.stderr,
+                )
+                self.eng.addpath(helpers_path, nargout=0)
 
                 print("MATLAB engine initialized successfully", file=sys.stderr)
                 return
@@ -908,6 +934,410 @@ class MatlabEngine:
                 workspace[var] = f"<Error reading variable: {str(e)}>"
 
         return workspace
+
+    async def get_variable(
+        self,
+        name: str,
+        fields: list[str] | None = None,
+        depth: int = 1,
+        max_elements: int = 100,
+    ) -> dict:
+        """Get a specific variable with selective field retrieval.
+
+        Args:
+            name: Variable name (can include field access like "EEG.chanlocs")
+            fields: Specific fields to retrieve (for structs)
+            depth: Retrieval depth (0=info only, 1=values, 2+=nested)
+            max_elements: Maximum array elements to transfer
+
+        Returns:
+            Dictionary containing the variable data or info
+        """
+        await self.initialize()
+
+        try:
+            # Check if variable exists
+            exists = self.eng.eval(f"exist('{name.split('.')[0]}', 'var')", nargout=1)
+            if exists == 0:
+                return {"_mcp_error": f"Variable '{name}' not found in workspace"}
+
+            # Get the variable class
+            var_class = self.eng.eval(f"class({name})", nargout=1)
+
+            # Handle struct with specific fields
+            if var_class == "struct" and fields:
+                # Use our helper function
+                fields_str = "{" + ", ".join(f"'{f}'" for f in fields) + "}"
+                result = self.eng.eval(
+                    f"mcp_get_fields({name}, {fields_str}, {max_elements})", nargout=1
+                )
+                return self._convert_matlab_value(result, depth, max_elements)
+
+            # Handle struct without specific fields (get info or all)
+            if var_class == "struct":
+                if depth == 0:
+                    # Info only
+                    result = self.eng.eval(f"mcp_struct_info({name})", nargout=1)
+                    return self._convert_matlab_value(result, 1, max_elements)
+                else:
+                    # Get all fields with limits
+                    result = self.eng.eval(
+                        f"mcp_get_fields({name}, fieldnames({name}), {max_elements})",
+                        nargout=1,
+                    )
+                    return self._convert_matlab_value(result, depth - 1, max_elements)
+
+            # Handle arrays
+            value = self.eng.eval(name, nargout=1)
+            return self._convert_matlab_value(value, depth, max_elements)
+
+        except Exception as e:
+            return {"_mcp_error": f"Error retrieving variable: {str(e)}"}
+
+    async def get_struct_info(self, var_name: str) -> dict:
+        """Get struct field information without transferring values.
+
+        Args:
+            var_name: Name of the struct variable
+
+        Returns:
+            Dictionary with field names, types, sizes, and memory usage
+        """
+        await self.initialize()
+
+        try:
+            # Check if variable exists and is a struct
+            exists = self.eng.eval(
+                f"exist('{var_name.split('.')[0]}', 'var')", nargout=1
+            )
+            if exists == 0:
+                return {"_mcp_error": f"Variable '{var_name}' not found"}
+
+            var_class = self.eng.eval(f"class({var_name})", nargout=1)
+            if var_class != "struct":
+                return {
+                    "_mcp_error": f"Variable '{var_name}' is not a struct (is {var_class})"
+                }
+
+            # Use our helper function
+            result = self.eng.eval(f"mcp_struct_info({var_name})", nargout=1)
+            return self._convert_struct_info(result)
+
+        except Exception as e:
+            return {"_mcp_error": f"Error getting struct info: {str(e)}"}
+
+    async def list_workspace_variables(
+        self,
+        pattern: str | None = None,
+        var_type: str | None = None,
+    ) -> list[dict]:
+        """List workspace variables with optional filtering.
+
+        Args:
+            pattern: Regex pattern to filter variable names
+            var_type: Filter by MATLAB class (e.g., 'struct', 'double')
+
+        Returns:
+            List of dictionaries with variable info
+        """
+        await self.initialize()
+        import re
+
+        try:
+            # Get variable names using who (returns cell array of names)
+            var_names = self.eng.eval("who", nargout=1)
+
+            if not var_names:
+                return []
+
+            variables = []
+
+            for name in var_names:
+                # Apply pattern filter early
+                if pattern:
+                    if not re.search(pattern, name):
+                        continue
+
+                # Get variable info individually
+                try:
+                    var_class = self.eng.eval(f"class({name})", nargout=1)
+
+                    # Apply type filter
+                    if var_type:
+                        if var_class.lower() != var_type.lower():
+                            continue
+
+                    # Get size
+                    size_result = self.eng.eval(f"size({name})", nargout=1)
+                    size = (
+                        list(size_result._data)
+                        if hasattr(size_result, "_data")
+                        else list(size_result)
+                    )
+
+                    # Estimate bytes based on size and type
+                    bytes_val = 0
+                    try:
+                        numel = self.eng.eval(f"numel({name})", nargout=1)
+                        # Estimate bytes per element based on type
+                        bytes_per_element = {
+                            "double": 8,
+                            "single": 4,
+                            "int64": 8,
+                            "uint64": 8,
+                            "int32": 4,
+                            "uint32": 4,
+                            "int16": 2,
+                            "uint16": 2,
+                            "int8": 1,
+                            "uint8": 1,
+                            "logical": 1,
+                            "char": 2,
+                        }.get(var_class, 8)
+                        bytes_val = int(numel * bytes_per_element)
+                    except Exception:
+                        pass
+
+                    var_info = {
+                        "name": name,
+                        "class": var_class,
+                        "size": size,
+                        "bytes": bytes_val,
+                        "is_struct": var_class == "struct",
+                        "is_numeric": var_class
+                        in [
+                            "double",
+                            "single",
+                            "int8",
+                            "int16",
+                            "int32",
+                            "int64",
+                            "uint8",
+                            "uint16",
+                            "uint32",
+                            "uint64",
+                        ],
+                        "is_cell": var_class == "cell",
+                    }
+                    variables.append(var_info)
+
+                except Exception:
+                    # Skip variables that can't be queried
+                    continue
+
+            return variables
+
+        except Exception as e:
+            return [{"_mcp_error": f"Error listing variables: {str(e)}"}]
+
+    def _extract_var_info(self, item) -> dict | None:
+        """Extract variable info from a MATLAB struct.
+
+        Args:
+            item: MATLAB struct with variable info
+
+        Returns:
+            Dictionary with variable info or None if extraction fails
+        """
+        try:
+            # Handle struct with _fieldnames attribute
+            if hasattr(item, "_fieldnames"):
+                return {
+                    "name": str(getattr(item, "name", "")),
+                    "class": str(getattr(item, "var_class", "")),
+                    "size": list(getattr(item, "var_size", []))
+                    if hasattr(getattr(item, "var_size", None), "__iter__")
+                    else [],
+                    "bytes": int(getattr(item, "bytes", 0)),
+                    "is_struct": bool(getattr(item, "is_struct", False)),
+                    "is_numeric": bool(getattr(item, "is_numeric", False)),
+                    "is_cell": bool(getattr(item, "is_cell", False)),
+                }
+            # Handle dict-like access
+            elif isinstance(item, dict):
+                return {
+                    "name": str(item.get("name", "")),
+                    "class": str(item.get("var_class", item.get("class", ""))),
+                    "size": list(item.get("var_size", item.get("size", []))),
+                    "bytes": int(item.get("bytes", 0)),
+                    "is_struct": bool(item.get("is_struct", False)),
+                    "is_numeric": bool(item.get("is_numeric", False)),
+                    "is_cell": bool(item.get("is_cell", False)),
+                }
+            return None
+        except Exception:
+            return None
+
+    def _convert_matlab_value(
+        self, value, depth: int = 1, max_elements: int = 100
+    ) -> any:
+        """Convert MATLAB value to Python with depth and size limits.
+
+        Args:
+            value: MATLAB value to convert
+            depth: Remaining depth for nested conversion
+            max_elements: Maximum array elements
+
+        Returns:
+            Python representation of the value
+        """
+        import matlab
+
+        # Handle None
+        if value is None:
+            return None
+
+        # Handle matlab.double arrays
+        if isinstance(value, matlab.double):
+            size = value.size
+            total_elements = 1
+            for dim in size:
+                total_elements *= dim
+
+            if total_elements <= max_elements:
+                # Small enough to return full data
+                if len(size) == 2 and (size[0] == 1 or size[1] == 1):
+                    return list(value._data)
+                else:
+                    return [list(row) for row in value]
+            else:
+                # Return summary for large arrays
+                flat_data = list(value._data)
+                return {
+                    "_mcp_type": "large_array",
+                    "class": "double",
+                    "size": list(size),
+                    "numel": total_elements,
+                    "sample": flat_data[: min(max_elements, len(flat_data))],
+                    "statistics": {
+                        "min": min(flat_data),
+                        "max": max(flat_data),
+                        "mean": sum(flat_data) / len(flat_data),
+                    },
+                }
+
+        # Handle MATLAB structs
+        if hasattr(value, "_fieldnames"):
+            if depth <= 0:
+                # Return field names only
+                return {
+                    "_mcp_type": "struct",
+                    "fields": list(value._fieldnames),
+                }
+
+            # Convert struct fields
+            result = {}
+            for field in value._fieldnames:
+                field_val = getattr(value, field)
+                result[field] = self._convert_matlab_value(
+                    field_val, depth - 1, max_elements
+                )
+            return result
+
+        # Handle strings
+        if isinstance(value, str):
+            if len(value) > 500:
+                return {
+                    "_mcp_type": "truncated_string",
+                    "length": len(value),
+                    "preview": value[:500],
+                }
+            return value
+
+        # Handle lists/tuples
+        if isinstance(value, (list, tuple)):
+            if len(value) <= max_elements:
+                return [
+                    self._convert_matlab_value(v, depth - 1, max_elements)
+                    for v in value
+                ]
+            else:
+                return {
+                    "_mcp_type": "large_list",
+                    "length": len(value),
+                    "sample": [
+                        self._convert_matlab_value(v, depth - 1, max_elements)
+                        for v in value[:max_elements]
+                    ],
+                }
+
+        # Handle dicts
+        if isinstance(value, dict):
+            return {
+                k: self._convert_matlab_value(v, depth - 1, max_elements)
+                for k, v in value.items()
+            }
+
+        # Handle primitives
+        if isinstance(value, (int, float, bool)):
+            return value
+
+        # Fallback: convert to string
+        try:
+            return str(value)
+        except Exception:
+            return f"<unconvertible: {type(value).__name__}>"
+
+    def _convert_struct_info(self, info) -> dict:
+        """Convert struct info from MATLAB to Python dict.
+
+        Args:
+            info: MATLAB struct info from mcp_struct_info (dict or struct)
+
+        Returns:
+            Dictionary with field information
+        """
+        import matlab
+
+        result = {}
+
+        # Handle dict (common case with newer MATLAB engine)
+        if isinstance(info, dict):
+            for field_name, field_data in info.items():
+                if isinstance(field_data, dict):
+                    field_info = {}
+                    for prop, val in field_data.items():
+                        if isinstance(val, str):
+                            field_info[prop] = val
+                        elif isinstance(val, matlab.double):
+                            # Convert matlab.double to list
+                            field_info[prop] = list(val._data)
+                        elif isinstance(val, (int, float, bool)):
+                            field_info[prop] = val
+                        elif isinstance(val, list):
+                            field_info[prop] = val
+                        else:
+                            field_info[prop] = str(val)
+                    result[field_name] = field_info
+                else:
+                    result[field_name] = str(field_data)
+            return result
+
+        # Handle MATLAB struct with _fieldnames (older MATLAB engine)
+        if hasattr(info, "_fieldnames"):
+            for field in info._fieldnames:
+                field_data = getattr(info, field)
+                field_info = {}
+
+                if hasattr(field_data, "_fieldnames"):
+                    for prop in field_data._fieldnames:
+                        val = getattr(field_data, prop)
+                        if isinstance(val, str):
+                            field_info[prop] = val
+                        elif hasattr(val, "_data"):
+                            field_info[prop] = list(val._data)
+                        elif isinstance(val, (int, float, bool)):
+                            field_info[prop] = val
+                        elif isinstance(val, list):
+                            field_info[prop] = val
+                        else:
+                            field_info[prop] = str(val)
+                elif isinstance(field_data, dict):
+                    field_info = self._convert_struct_info({"_": field_data})["_"]
+
+                result[field] = field_info
+
+        return result
 
     async def get_memory_status(self) -> MemoryStatus:
         """Get current workspace memory status."""

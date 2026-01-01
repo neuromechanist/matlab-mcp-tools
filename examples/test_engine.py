@@ -1,8 +1,8 @@
 """Simple test script for MATLAB engine functionality."""
 
 import asyncio
-from pathlib import Path
 import sys
+from pathlib import Path
 
 # Add src directory to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -19,7 +19,7 @@ async def test_engine():
         await engine.initialize()
 
         # Run a simple MATLAB command
-        result = await engine.execute('2 + 2')
+        result = await engine.execute("2 + 2")
         print(f"2 + 2 = {result.output}")
 
         # Try plotting
@@ -27,9 +27,7 @@ async def test_engine():
         if script_path.exists():
             print(f"\nExecuting plot script: {script_path}")
             result = await engine.execute(
-                str(script_path),
-                is_file=True,
-                capture_plots=True
+                str(script_path), is_file=True, capture_plots=True
             )
             print(f"Generated {len(result.figures)} figures")
 
