@@ -23,7 +23,7 @@ def parse_sections(file_path: Path) -> List[Tuple[int, int, str]]:
         lines = f.readlines()
 
     for i, line in enumerate(lines):
-        if line.startswith('%%'):
+        if line.startswith("%%"):
             # If we found a section marker, end the previous section
             if current_start < i:
                 sections.append((current_start, i - 1, current_title))
@@ -45,10 +45,7 @@ def parse_sections(file_path: Path) -> List[Tuple[int, int, str]]:
 
 
 def extract_section(
-    file_path: Path,
-    start_line: int,
-    end_line: int,
-    maintain_workspace: bool = True
+    file_path: Path, start_line: int, end_line: int, maintain_workspace: bool = True
 ) -> str:
     """Extract a section of MATLAB code from a file.
 
@@ -65,13 +62,13 @@ def extract_section(
         lines = f.readlines()
 
     # Extract the section lines
-    section_lines = lines[start_line:end_line + 1]
+    section_lines = lines[start_line : end_line + 1]
 
     # If not maintaining workspace, add clear command at the start
     if not maintain_workspace:
-        section_lines.insert(0, 'clear;\n')
+        section_lines.insert(0, "clear;\n")
 
-    return ''.join(section_lines)
+    return "".join(section_lines)
 
 
 def get_section_info(file_path: Path) -> List[dict]:
@@ -98,17 +95,14 @@ def get_section_info(file_path: Path) -> List[dict]:
     for start, end, title in sections:
         # Find first non-comment line for preview
         preview = ""
-        for line in lines[start:end + 1]:
+        for line in lines[start : end + 1]:
             stripped = line.strip()
-            if stripped and not stripped.startswith('%'):
+            if stripped and not stripped.startswith("%"):
                 preview = stripped
                 break
 
-        section_info.append({
-            'title': title,
-            'start_line': start,
-            'end_line': end,
-            'preview': preview
-        })
+        section_info.append(
+            {"title": title, "start_line": start, "end_line": end, "preview": preview}
+        )
 
     return section_info

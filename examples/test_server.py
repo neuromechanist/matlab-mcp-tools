@@ -27,10 +27,7 @@ async def test_basic_execution():
         print(f"Error: Script not found at {script_path}")
         return
 
-    result = await server.engine.execute(
-        str(script_path),
-        is_file=True
-    )
+    result = await server.engine.execute(str(script_path), is_file=True)
     print(f"Output: {result.output}")
     print(f"Workspace: {result.workspace}")
     print(f"Number of figures captured: {len(result.figures)}")

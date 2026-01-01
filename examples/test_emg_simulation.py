@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+
 from matlab_mcp.server import MatlabServer
 
 
@@ -14,7 +15,9 @@ async def test_emg():
 
     try:
         # Add matlab_scripts directory to MATLAB path
-        script_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), 'matlab_scripts'))
+        script_dir = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "matlab_scripts")
+        )
         print(f"Adding script directory to path: {script_dir}")
         await server.engine.execute(f"addpath(genpath('{script_dir}'))")
 
@@ -23,10 +26,7 @@ async def test_emg():
 
         print("Running EMG simulation...")
         # Run the EMG simulation
-        result = await server.engine.execute(
-            "simulate_emg",
-            capture_plots=True
-        )
+        result = await server.engine.execute("simulate_emg", capture_plots=True)
         print(f"Simulation complete. Result: {result}")
 
         # Verify figures were captured

@@ -3,14 +3,14 @@
 import asyncio
 import os
 
-from matlab_mcp.server import MatlabServer
 from matlab_mcp.models import FigureFormat
+from matlab_mcp.server import MatlabServer
 
 
 async def test_server_initialization():
     """Test server initialization sequence."""
     print("\nTesting server initialization with detailed logging...")
-    print("Current MATLAB_PATH:", os.getenv('MATLAB_PATH', 'Not set'))
+    print("Current MATLAB_PATH:", os.getenv("MATLAB_PATH", "Not set"))
 
     server = MatlabServer()
 
@@ -51,8 +51,7 @@ async def test_figure_cleanup():
 
     # Create a test plot
     result = await server.engine.execute(
-        "figure; plot(1:10); title('Test Plot')",
-        capture_plots=True
+        "figure; plot(1:10); title('Test Plot')", capture_plots=True
     )
 
     # Verify figures were captured
@@ -86,7 +85,7 @@ async def test_concurrent_requests():
     results = await asyncio.gather(
         server._list_tools(),
         server._list_resources(),
-        server._list_resource_templates()
+        server._list_resource_templates(),
     )
 
     # Verify all requests completed successfully

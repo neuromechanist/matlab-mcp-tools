@@ -23,7 +23,9 @@ async def test_section_execution():
     sections = get_section_info(script_path)
     print(f"Found {len(sections)} sections:")
     for section in sections:
-        print(f"- {section['title']} (lines {section['start_line']}-{section['end_line']})")
+        print(
+            f"- {section['title']} (lines {section['start_line']}-{section['end_line']})"
+        )
         print(f"  Preview: {section['preview']}")
 
     # Test executing each section
@@ -31,8 +33,7 @@ async def test_section_execution():
     for section in sections:
         print(f"\nExecuting section: {section['title']}")
         result = await server.engine.execute_section(
-            str(script_path),
-            (section['start_line'], section['end_line'])
+            str(script_path), (section["start_line"], section["end_line"])
         )
 
         print("Output:")
@@ -50,7 +51,9 @@ async def test_section_execution():
             output_dir.mkdir(exist_ok=True)
 
             for i, fig_data in enumerate(result.figures):
-                output_path = output_dir / f"section_{section['start_line']}_figure_{i}.png"
+                output_path = (
+                    output_dir / f"section_{section['start_line']}_figure_{i}.png"
+                )
                 output_path.write_bytes(fig_data)
                 print(f"Saved figure to: {output_path}")
 
