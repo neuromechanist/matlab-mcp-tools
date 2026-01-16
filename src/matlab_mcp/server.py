@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from mcp.server.fastmcp import Context, FastMCP, Image
 
 from .engine import MatlabEngine
+from .figure_analysis import DEFAULT_ANALYSIS_PROMPT
 from .models import CompressionConfig, FigureData
 
 
@@ -608,6 +609,242 @@ async def create_matlab_script(
         ctx.info(f"Created MATLAB script: {script_path}")
 
     return str(script_path)
+
+
+@mcp.tool()
+async def get_figure_metadata(
+    figure_number: int = 1,
+    ctx: Optional[Context] = None,
+) -> Dict[str, Any]:
+    """Extract metadata from a MATLAB figure.
+
+    Retrieves comprehensive information about a figure including:
+    - Title, axis labels, and axis limits
+    - Legend entries and colorbar information
+    - Number and colors of lines/surfaces
+    - Colormap name (if identifiable)
+
+    This is useful for understanding figure contents programmatically
+    or for preparing context for LLM-based figure analysis.
+
+    Args:
+        figure_number: MATLAB figure number to analyze (default: 1)
+
+    Returns:
+        Dictionary with figure metadata:
+        {
+            "figure_number": 1,
+            "title": "My Plot",
+            "xlabel": "Time (s)",
+            "ylabel": "Amplitude (V)",
+            "xlim": [0, 10],
+            "ylim": [-1, 1],
+            "num_lines": 3,
+            "line_colors": ["blue", "red", "green"],
+            "legend_entries": ["Signal 1", "Signal 2", "Signal 3"],
+            ...
+        }
+    """
+    server = MatlabServer.get_instance()
+    await server.initialize()
+
+    if ctx:
+        ctx.info(f"Getting metadata for figure {figure_number}")
+
+    metadata = await server.engine.get_figure_metadata(figure_number)
+
+    # Convert dataclass to dict for JSON serialization
+    return {
+        "figure_number": metadata.figure_number,
+        "title": metadata.title,
+        "xlabel": metadata.xlabel,
+        "ylabel": metadata.ylabel,
+        "zlabel": metadata.zlabel,
+        "xlim": metadata.xlim,
+        "ylim": metadata.ylim,
+        "zlim": metadata.zlim,
+        "legend_entries": metadata.legend_entries,
+        "colorbar_label": metadata.colorbar_label,
+        "colorbar_limits": metadata.colorbar_limits,
+        "num_subplots": metadata.num_subplots,
+        "num_lines": metadata.num_lines,
+        "num_images": metadata.num_images,
+        "line_colors": metadata.line_colors,
+        "line_styles": metadata.line_styles,
+        "line_labels": metadata.line_labels,
+        "colormap_name": metadata.colormap_name,
+    }
+
+
+@mcp.tool()
+async def get_plot_data(
+    figure_number: int = 1,
+    line_index: int = 1,
+    ctx: Optional[Context] = None,
+) -> Dict[str, Any]:
+    """Extract raw data from a plotted line in a MATLAB figure.
+
+    Retrieves the X, Y (and Z for 3D plots) data from a specific line
+    object in a figure. Useful for:
+    - Exporting plot data for further analysis
+    - Verifying plotted values
+    - Recreating plots in other tools
+
+    Args:
+        figure_number: MATLAB figure number (default: 1)
+        line_index: 1-based index of the line to extract (default: 1)
+
+    Returns:
+        Dictionary with line data:
+        {
+            "line_index": 1,
+            "xdata": [0, 1, 2, 3, ...],
+            "ydata": [0.1, 0.5, 0.3, ...],
+            "zdata": [],  # Empty for 2D plots
+            "label": "My Signal",
+            "color": [0, 0.447, 0.741],
+            "style": "-",
+            "marker": "none"
+        }
+    """
+    server = MatlabServer.get_instance()
+    await server.initialize()
+
+    if ctx:
+        ctx.info(f"Getting data for line {line_index} in figure {figure_number}")
+
+    plot_data = await server.engine.get_plot_data(figure_number, line_index)
+
+    return {
+        "line_index": plot_data.line_index,
+        "xdata": plot_data.xdata,
+        "ydata": plot_data.ydata,
+        "zdata": plot_data.zdata,
+        "label": plot_data.label,
+        "color": plot_data.color,
+        "style": plot_data.style,
+        "marker": plot_data.marker,
+    }
+
+
+@mcp.tool()
+async def analyze_figure(
+    figure_number: int = 1,
+    custom_prompt: Optional[str] = None,
+    include_metadata: bool = True,
+    ctx: Optional[Context] = None,
+) -> Dict[str, Any]:
+    """Prepare a MATLAB figure for LLM vision analysis.
+
+    Captures a figure as an image and prepares an analysis prompt that
+    emphasizes understanding:
+    - Axes, scales, and units
+    - Colors and their meanings (what each color represents)
+    - Data interpretation and patterns
+    - Legend and labels
+    - Quality assessment
+
+    The returned image and prompt can be used with vision-capable LLMs
+    to get detailed figure analysis.
+
+    Args:
+        figure_number: MATLAB figure number to analyze (default: 1)
+        custom_prompt: Optional custom prompt (replaces default if provided)
+        include_metadata: Whether to include extracted metadata in prompt (default: True)
+
+    Returns:
+        Dictionary containing:
+        - image: MCP Image object of the figure
+        - prompt: Analysis prompt (includes metadata if requested)
+        - metadata: Figure metadata dict (if include_metadata=True)
+
+    Example usage:
+        result = analyze_figure(1, include_metadata=True)
+        # Use result["image"] and result["prompt"] with a vision LLM
+        # The prompt emphasizes axes, units, colors, and their meanings
+    """
+    server = MatlabServer.get_instance()
+    await server.initialize()
+
+    if ctx:
+        ctx.info(f"Preparing figure {figure_number} for analysis")
+
+    # Get the prepared analysis data
+    analysis_data = await server.engine.prepare_figure_for_analysis(
+        figure_number=figure_number,
+        custom_prompt=custom_prompt,
+        include_metadata=include_metadata,
+    )
+
+    # Check for errors
+    if "error" in analysis_data:
+        return {
+            "error": analysis_data["error"],
+            "prompt": analysis_data.get("prompt", ""),
+        }
+
+    # Convert FigureData to MCP Image
+    figure_data = analysis_data.get("figure")
+    if figure_data is None:
+        return {
+            "error": "Failed to capture figure",
+            "prompt": analysis_data.get("prompt", ""),
+        }
+
+    image = _figure_to_image(figure_data)
+
+    result = {
+        "image": image,
+        "prompt": analysis_data["prompt"],
+    }
+
+    if include_metadata:
+        metadata = analysis_data["metadata"]
+        result["metadata"] = {
+            "figure_number": metadata.figure_number,
+            "title": metadata.title,
+            "xlabel": metadata.xlabel,
+            "ylabel": metadata.ylabel,
+            "xlim": metadata.xlim,
+            "ylim": metadata.ylim,
+            "num_lines": metadata.num_lines,
+            "line_colors": metadata.line_colors,
+            "legend_entries": metadata.legend_entries,
+        }
+
+    return result
+
+
+@mcp.tool()
+async def get_analysis_prompt(
+    custom_additions: Optional[str] = None,
+    ctx: Optional[Context] = None,
+) -> str:
+    """Get the default figure analysis prompt.
+
+    Returns the standard prompt used for LLM-based figure analysis,
+    which emphasizes:
+    1. Axes and scales (labels, units, ranges, scale type)
+    2. Colors and meanings (what each color represents)
+    3. Data interpretation (plot type, trends, patterns)
+    4. Legend and labels (categories, conditions)
+    5. Quality assessment (clarity, suggestions)
+
+    Args:
+        custom_additions: Optional text to append to the default prompt
+
+    Returns:
+        The analysis prompt string
+    """
+    if ctx:
+        ctx.info("Getting default analysis prompt")
+
+    prompt = DEFAULT_ANALYSIS_PROMPT
+
+    if custom_additions:
+        prompt = f"{prompt}\n\nAdditional instructions:\n{custom_additions}"
+
+    return prompt
 
 
 # Define resources at module level
