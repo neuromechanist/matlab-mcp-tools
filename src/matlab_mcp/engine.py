@@ -15,6 +15,16 @@ from mcp.server.fastmcp import Context
 from PIL import Image
 
 from .converters import ConversionConfig, MatlabConverter
+from .figure_analysis import (
+    DEFAULT_ANALYSIS_PROMPT,
+    MATLAB_GET_FIGURE_METADATA,
+    MATLAB_GET_PLOT_DATA,
+    FigureAnalysisResult,
+    FigureMetadata,
+    PlotData,
+    format_metadata_for_analysis,
+    get_color_description,
+)
 from .models import (
     CompressionConfig,
     ConnectionStatus,
@@ -659,16 +669,8 @@ class MatlabEngine:
                         # Use painters renderer for better quality (vector-based)
                         print_args.append("'-painters'")
 
-                    # Add compression-friendly settings
-                    if figure_compression_config.quality < 50:
-                        # For low quality, use loose bounds to reduce file size
-                        print_args.append("'-loose'")
-                    else:
-                        # For higher quality, use tight bounds
-                        print_args.append("'-tight'")
-
-                    # Remove unnecessary margins for smaller files
-                    print_args.append("'-fillpage'")
+                    # Note: -tight/-loose/-fillpage options removed as they are deprecated
+                    # or not supported for PNG format in newer MATLAB versions (R2025b+)
 
                     # Set figure properties for optimal compression
                     fig_optimization = (
@@ -1699,6 +1701,419 @@ class MatlabEngine:
             )
 
         return section_info
+
+    def _setup_figure_analysis_helpers(self) -> None:
+        """Set up MATLAB helper functions for figure analysis."""
+        # Write helper functions to the helpers directory
+        metadata_helper = self.helpers_dir / "mcp_get_figure_metadata.m"
+        plot_data_helper = self.helpers_dir / "mcp_get_plot_data.m"
+
+        if not metadata_helper.exists():
+            metadata_helper.write_text(MATLAB_GET_FIGURE_METADATA)
+
+        if not plot_data_helper.exists():
+            plot_data_helper.write_text(MATLAB_GET_PLOT_DATA)
+
+    async def get_figure_metadata(self, figure_number: int = 1) -> FigureMetadata:
+        """Extract comprehensive metadata from a MATLAB figure.
+
+        This extracts information about axes, labels, colors, legends, and
+        other properties directly from the MATLAB figure object.
+
+        Args:
+            figure_number: MATLAB figure number (default: 1)
+
+        Returns:
+            FigureMetadata object with extracted properties
+        """
+        await self.initialize()
+        self._setup_figure_analysis_helpers()
+
+        try:
+            # Check if figure exists
+            fig_exists = self.eng.eval(
+                f"ishandle({figure_number}) && strcmp(get({figure_number}, 'Type'), 'figure')",
+                nargout=1,
+            )
+
+            if not fig_exists:
+                return FigureMetadata(
+                    figure_number=figure_number,
+                    axes_properties={"error": f"Figure {figure_number} does not exist"},
+                )
+
+            # Call the helper function
+            result = self.eng.eval(
+                f"mcp_get_figure_metadata({figure_number})", nargout=1
+            )
+
+            # Convert MATLAB struct to FigureMetadata
+            # Handle both dict (newer MATLAB Engine) and object (older versions)
+            metadata = FigureMetadata(figure_number=figure_number)
+
+            def get_field(obj, field_name, default=None):
+                """Get field from dict or object."""
+                if isinstance(obj, dict):
+                    return obj.get(field_name, default)
+                return getattr(obj, field_name, default)
+
+            def to_flat_list(val):
+                """Convert MATLAB array to flat Python list."""
+                if val is None:
+                    return []
+                if hasattr(val, "_data"):
+                    # matlab.double object - use _data directly
+                    if hasattr(val._data, "tolist"):
+                        return val._data.tolist()
+                    return list(val._data)
+                if isinstance(val, (list, tuple)) and val:
+                    # Check if first element is matlab.double
+                    first = val[0]
+                    if hasattr(first, "_data"):
+                        if hasattr(first._data, "tolist"):
+                            return first._data.tolist()
+                        return list(first._data)
+                    # Check if nested list
+                    if isinstance(first, (list, tuple)):
+                        return list(first)
+                return list(val) if val else []
+
+            if get_field(result, "error"):
+                metadata.axes_properties = {"error": str(get_field(result, "error"))}
+                return metadata
+
+            # Extract fields from result
+            title_val = get_field(result, "title")
+            if title_val:
+                metadata.title = str(title_val)
+            xlabel_val = get_field(result, "xlabel")
+            if xlabel_val:
+                metadata.xlabel = str(xlabel_val)
+            ylabel_val = get_field(result, "ylabel")
+            if ylabel_val:
+                metadata.ylabel = str(ylabel_val)
+            zlabel_val = get_field(result, "zlabel")
+            if zlabel_val:
+                metadata.zlabel = str(zlabel_val)
+
+            xlim_val = get_field(result, "xlim")
+            if xlim_val:
+                metadata.xlim = to_flat_list(xlim_val)
+            ylim_val = get_field(result, "ylim")
+            if ylim_val:
+                metadata.ylim = to_flat_list(ylim_val)
+            zlim_val = get_field(result, "zlim")
+            if zlim_val:
+                metadata.zlim = to_flat_list(zlim_val)
+
+            legend_val = get_field(result, "legend_entries")
+            if legend_val:
+                if isinstance(legend_val, str):
+                    metadata.legend_entries = [legend_val]
+                else:
+                    metadata.legend_entries = list(legend_val)
+
+            colorbar_label_val = get_field(result, "colorbar_label")
+            if colorbar_label_val:
+                metadata.colorbar_label = str(colorbar_label_val)
+            colorbar_limits_val = get_field(result, "colorbar_limits")
+            if colorbar_limits_val:
+                metadata.colorbar_limits = list(colorbar_limits_val)
+
+            num_subplots_val = get_field(result, "num_subplots")
+            if num_subplots_val is not None:
+                metadata.num_subplots = int(num_subplots_val)
+            num_lines_val = get_field(result, "num_lines")
+            if num_lines_val is not None:
+                metadata.num_lines = int(num_lines_val)
+            num_images_val = get_field(result, "num_images")
+            if num_images_val is not None:
+                metadata.num_images = int(num_images_val)
+
+            line_colors_val = get_field(result, "line_colors")
+            if line_colors_val:
+                # Handle nested matlab.double arrays
+                colors = []
+                for c in line_colors_val:
+                    if isinstance(c, (list, tuple)) and c:
+                        first = c[0]
+                        if hasattr(first, "_data"):
+                            if hasattr(first._data, "tolist"):
+                                colors.append(first._data.tolist())
+                            else:
+                                colors.append(list(first._data))
+                        else:
+                            colors.append(
+                                list(first)
+                                if isinstance(first, (list, tuple))
+                                else to_flat_list(c)
+                            )
+                    elif hasattr(c, "_data"):
+                        if hasattr(c._data, "tolist"):
+                            colors.append(c._data.tolist())
+                        else:
+                            colors.append(list(c._data))
+                    else:
+                        colors.append(list(c) if c else [])
+                metadata.line_colors = colors
+            line_styles_val = get_field(result, "line_styles")
+            if line_styles_val:
+                metadata.line_styles = list(line_styles_val)
+            line_labels_val = get_field(result, "line_labels")
+            if line_labels_val:
+                metadata.line_labels = list(line_labels_val)
+
+            colormap_name_val = get_field(result, "colormap_name")
+            if colormap_name_val:
+                metadata.colormap_name = str(colormap_name_val)
+
+            return metadata
+
+        except Exception as e:
+            return FigureMetadata(
+                figure_number=figure_number,
+                axes_properties={"error": f"Error extracting metadata: {str(e)}"},
+            )
+
+    async def get_plot_data(
+        self, figure_number: int = 1, line_index: int = 1
+    ) -> PlotData:
+        """Extract data points from a plotted line in a figure.
+
+        Args:
+            figure_number: MATLAB figure number (default: 1)
+            line_index: 1-based index of the line to extract (default: 1)
+
+        Returns:
+            PlotData object with x, y, z coordinates and line properties
+        """
+        await self.initialize()
+        self._setup_figure_analysis_helpers()
+
+        try:
+            # Call the helper function
+            result = self.eng.eval(
+                f"mcp_get_plot_data({figure_number}, {line_index})", nargout=1
+            )
+
+            plot_data = PlotData(line_index=line_index)
+
+            # Handle both dict (newer MATLAB Engine) and object (older versions)
+            def get_field(obj, field_name, default=None):
+                """Get field from dict or object."""
+                if isinstance(obj, dict):
+                    return obj.get(field_name, default)
+                return getattr(obj, field_name, default)
+
+            error_val = get_field(result, "error")
+            if error_val:
+                plot_data.label = f"Error: {error_val}"
+                return plot_data
+
+            def to_flat_list(val):
+                """Convert MATLAB array to flat Python list."""
+                if val is None:
+                    return []
+                if hasattr(val, "_data"):
+                    # matlab.double object - use _data directly
+                    if hasattr(val._data, "tolist"):
+                        return val._data.tolist()
+                    return list(val._data)
+                if hasattr(val, "tolist"):
+                    result = val.tolist()
+                    # Flatten if 2D (row vector)
+                    if result and isinstance(result[0], list):
+                        return result[0]
+                    return result
+                return list(val)
+
+            xdata_val = get_field(result, "xdata")
+            if xdata_val is not None:
+                plot_data.xdata = to_flat_list(xdata_val)
+
+            ydata_val = get_field(result, "ydata")
+            if ydata_val is not None:
+                plot_data.ydata = to_flat_list(ydata_val)
+
+            zdata_val = get_field(result, "zdata")
+            if zdata_val is not None:
+                data = to_flat_list(zdata_val)
+                if data:  # Only set if non-empty
+                    plot_data.zdata = data
+
+            label_val = get_field(result, "label")
+            if label_val:
+                plot_data.label = str(label_val)
+
+            color_val = get_field(result, "color")
+            if color_val is not None:
+                plot_data.color = list(color_val)
+
+            style_val = get_field(result, "style")
+            if style_val:
+                plot_data.style = str(style_val)
+
+            marker_val = get_field(result, "marker")
+            if marker_val:
+                plot_data.marker = str(marker_val)
+
+            return plot_data
+
+        except Exception as e:
+            return PlotData(line_index=line_index, label=f"Error: {str(e)}")
+
+    async def prepare_figure_for_analysis(
+        self,
+        figure_number: int = 1,
+        custom_prompt: str | None = None,
+        include_metadata: bool = True,
+    ) -> dict:
+        """Prepare a figure for LLM vision analysis.
+
+        This method captures the figure as an image and prepares context
+        including metadata and a structured prompt for analysis.
+
+        Args:
+            figure_number: MATLAB figure number to analyze
+            custom_prompt: Custom analysis prompt (uses default if None)
+            include_metadata: Whether to include extracted metadata as context
+
+        Returns:
+            Dictionary with:
+            - figure: FigureData object with captured image
+            - metadata: FigureMetadata object (if include_metadata=True)
+            - prompt: The full prompt including metadata context
+        """
+        await self.initialize()
+
+        result = {
+            "figure_number": figure_number,
+            "figure": None,
+            "metadata": None,
+            "prompt": custom_prompt or DEFAULT_ANALYSIS_PROMPT,
+        }
+
+        try:
+            # Check if figure exists
+            fig_exists = self.eng.eval(
+                f"ishandle({figure_number}) && strcmp(get({figure_number}, 'Type'), 'figure')",
+                nargout=1,
+            )
+
+            if not fig_exists:
+                result["error"] = f"Figure {figure_number} does not exist"
+                return result
+
+            # Capture figure as PNG with high quality for analysis
+            png_file = self.output_dir / f"analysis_figure_{figure_number}.png"
+
+            # Use high quality settings for analysis
+            self.eng.eval(
+                f"fig = figure({figure_number}); "
+                f"set(fig, 'Color', 'white'); "
+                f"set(fig, 'InvertHardcopy', 'off');",
+                nargout=0,
+            )
+
+            # Print with high resolution for clear analysis
+            self.eng.eval(
+                f"print(figure({figure_number}), '{png_file}', '-dpng', '-r150', '-painters')",
+                nargout=0,
+            )
+
+            # Read the image data and create FigureData object
+            with open(png_file, "rb") as f:
+                image_data = f.read()
+
+            result["figure"] = FigureData(
+                data=image_data,
+                file_path=str(png_file),
+                format=FigureFormat.PNG,
+            )
+
+            # Extract metadata if requested
+            metadata = None
+            if include_metadata:
+                metadata = await self.get_figure_metadata(figure_number)
+                result["metadata"] = metadata
+
+                # Add metadata context to the prompt
+                metadata_context = format_metadata_for_analysis(metadata)
+                if metadata_context:
+                    result["prompt"] = (
+                        f"{metadata_context}\n\n---\n\n{result['prompt']}"
+                    )
+
+            return result
+
+        except Exception as e:
+            result["error"] = f"Error preparing figure: {str(e)}"
+            return result
+
+    async def analyze_figure_with_llm(
+        self,
+        figure_number: int = 1,
+        custom_prompt: str | None = None,
+        include_metadata: bool = True,
+    ) -> FigureAnalysisResult:
+        """Analyze a figure using LLM vision capabilities.
+
+        This method prepares the figure and returns structured data that can
+        be sent to an LLM for visual analysis. The actual LLM call should be
+        made by the MCP client.
+
+        Args:
+            figure_number: MATLAB figure number to analyze
+            custom_prompt: Custom analysis prompt (uses detailed default if None)
+            include_metadata: Whether to include extracted metadata as context
+
+        Returns:
+            FigureAnalysisResult with prepared analysis data
+
+        Note:
+            The returned result includes image data and prompts. The actual
+            LLM vision analysis should be performed by the MCP client using
+            the returned data.
+        """
+        prep_result = await self.prepare_figure_for_analysis(
+            figure_number=figure_number,
+            custom_prompt=custom_prompt,
+            include_metadata=include_metadata,
+        )
+
+        analysis_result = FigureAnalysisResult(figure_number=figure_number)
+
+        if "error" in prep_result:
+            analysis_result.description = f"Error: {prep_result['error']}"
+            return analysis_result
+
+        # The prompt already includes metadata context from prepare_figure_for_analysis
+        analysis_result.raw_response = prep_result["prompt"]
+        analysis_result.description = (
+            "Figure prepared for analysis. Use the image data with an LLM vision "
+            "model to get the full analysis."
+        )
+
+        # Store metadata analysis
+        if prep_result["metadata"]:
+            meta = prep_result["metadata"]
+            if meta.xlabel or meta.ylabel:
+                analysis_result.axes_analysis = (
+                    f"X-axis: {meta.xlabel or 'unlabeled'}, "
+                    f"Y-axis: {meta.ylabel or 'unlabeled'}"
+                )
+            if meta.line_colors:
+                color_info = []
+                for i, color in enumerate(meta.line_colors):
+                    label = (
+                        meta.line_labels[i]
+                        if i < len(meta.line_labels)
+                        else f"Line {i + 1}"
+                    )
+                    color_info.append(f"{label}: {get_color_description(color)}")
+                analysis_result.color_analysis = "; ".join(color_info)
+
+        return analysis_result
 
     def close(self) -> None:
         """Clean up MATLAB engine and resources."""
