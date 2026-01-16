@@ -14,6 +14,7 @@ import matlab.engine
 from mcp.server.fastmcp import Context
 from PIL import Image
 
+from .converters import ConversionConfig, MatlabConverter
 from .models import (
     CompressionConfig,
     ConnectionStatus,
@@ -169,8 +170,17 @@ class MatlabEngine:
         self,
         config: Optional[PerformanceConfig] = None,
         workspace_config: Optional[WorkspaceConfig] = None,
+        conversion_config: Optional[ConversionConfig] = None,
     ):
-        """Initialize MATLAB engine wrapper."""
+        """Initialize MATLAB engine wrapper.
+
+        Args:
+            config: Performance and reliability configuration
+            workspace_config: Workspace optimization configuration
+            conversion_config: MATLAB type conversion configuration (optional).
+                If provided, uses the new centralized MatlabConverter for type
+                conversions. If None, uses legacy conversion methods.
+        """
         self.eng = None
         # Use .mcp directory in home for all outputs
         self.mcp_dir = Path.home() / ".mcp"
@@ -189,6 +199,12 @@ class MatlabEngine:
         self.connection_start_time = time.time()
         self.connection_id = str(uuid.uuid4())
         self.last_activity = time.time()
+
+        # Type conversion configuration
+        self.conversion_config = conversion_config
+        self.converter = (
+            MatlabConverter(conversion_config) if conversion_config else None
+        )
 
         # Connection pool for improved performance
         self.connection_pool = MatlabConnectionPool()
@@ -1172,10 +1188,29 @@ class MatlabEngine:
         except Exception:
             return None
 
+    def convert_value(self, value: Any, depth: int = 1, max_elements: int = 100) -> Any:
+        """Convert MATLAB value to Python using configured converter.
+
+        If a conversion_config was provided at initialization, uses the new
+        centralized MatlabConverter. Otherwise, falls back to legacy conversion.
+
+        Args:
+            value: MATLAB value to convert
+            depth: Maximum recursion depth for nested structures
+            max_elements: Maximum array elements before summarizing
+
+        Returns:
+            Python native type (dict, list, float, str, etc.)
+        """
+        if self.converter is not None:
+            return self.converter.convert(value, depth)
+        else:
+            return self._convert_matlab_value(value, depth, max_elements)
+
     def _convert_matlab_value(
         self, value, depth: int = 1, max_elements: int = 100
     ) -> any:
-        """Convert MATLAB value to Python with depth and size limits.
+        """Convert MATLAB value to Python with depth and size limits (legacy).
 
         Args:
             value: MATLAB value to convert
