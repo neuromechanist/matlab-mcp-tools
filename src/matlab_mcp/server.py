@@ -12,6 +12,7 @@ from mcp.server.fastmcp import Context, FastMCP, Image
 
 from .engine import MatlabEngine
 from .figure_analysis import DEFAULT_ANALYSIS_PROMPT
+from .lint import run_lint
 from .matlab_compat import validate_environment
 from .models import CompressionConfig, FigureData
 
@@ -852,6 +853,59 @@ async def get_analysis_prompt(
         prompt = f"{prompt}\n\nAdditional instructions:\n{custom_additions}"
 
     return prompt
+
+
+@mcp.tool()
+async def matlab_lint(
+    code_or_file: str,
+    severity_filter: str = "all",
+    ctx: Optional[Context] = None,
+) -> Dict[str, Any]:
+    """Lint MATLAB code using checkcode (mlint).
+
+    Run static analysis on MATLAB code to find errors, warnings, and style
+    issues before execution. Supports both inline code strings and file paths.
+
+    Args:
+        code_or_file: MATLAB code string or absolute path to a .m file
+        severity_filter: Minimum severity to report: "error", "warning",
+            "info", or "all" (default: "all")
+
+    Returns:
+        Dict with:
+        - diagnostics: list of dicts with line, column, severity, id, message
+        - summary: dict with error, warning, and info counts
+        - has_issues: bool indicating whether any diagnostics were found
+    """
+    server = MatlabServer.get_instance()
+    await server.initialize()
+
+    if ctx:
+        ctx.info("Running MATLAB checkcode lint")
+
+    summary = await run_lint(server.engine, code_or_file, severity_filter)
+
+    diagnostics = [
+        {
+            "line": r.line,
+            "column": r.column,
+            "severity": r.severity,
+            "id": r.id,
+            "message": r.message,
+        }
+        for r in summary.results
+    ]
+
+    return {
+        "diagnostics": diagnostics,
+        "summary": {
+            "errors": summary.errors,
+            "warnings": summary.warnings,
+            "info": summary.info,
+            "total": len(summary.results),
+        },
+        "has_issues": len(summary.results) > 0,
+    }
 
 
 # Define resources at module level
