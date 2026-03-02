@@ -869,7 +869,7 @@ async def matlab_lint(
     Args:
         code_or_file: MATLAB code string or absolute path to a .m file
         severity_filter: Minimum severity to report: "error", "warning",
-            "info", or "all" (default: "all")
+            or "all" (default: "all")
 
     Returns:
         Dict with:
@@ -890,7 +890,7 @@ async def matlab_lint(
             "line": r.line,
             "column": r.column,
             "severity": r.severity,
-            "id": r.id,
+            "id": r.msg_id,
             "message": r.message,
         }
         for r in summary.results

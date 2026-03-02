@@ -4,11 +4,22 @@ This module provides functions for linting MATLAB code using checkcode (mlint)
 and returning structured diagnostic results.
 """
 
+from __future__ import annotations
+
+import logging
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import TYPE_CHECKING, Literal, Optional
+
+if TYPE_CHECKING:
+    from .engine import MatlabEngine
+
+logger = logging.getLogger(__name__)
+
+VALID_SEVERITY_FILTERS = {"all", "warning", "error"}
+LintSeverity = Literal["error", "warning", "info"]
 
 
-@dataclass
+@dataclass(frozen=True)
 class MatlabLintResult:
     """A single diagnostic result from MATLAB checkcode.
 
@@ -16,15 +27,15 @@ class MatlabLintResult:
         line: Line number where the issue was found
         column: Column number where the issue starts
         severity: Severity level ('error', 'warning', or 'info')
-        id: MATLAB checkcode message ID (e.g. 'NASGU', 'MCSUP')
+        msg_id: MATLAB checkcode message ID (e.g. 'NASGU', 'MCSUP')
         message: Human-readable description of the issue
         fix_suggestion: Optional suggested fix for the issue
     """
 
     line: int
     column: int
-    severity: str
-    id: str
+    severity: LintSeverity
+    msg_id: str
     message: str
     fix_suggestion: Optional[str] = None
 
@@ -34,19 +45,24 @@ class MatlabLintSummary:
     """Summary of MATLAB checkcode lint results.
 
     Attributes:
-        errors: Number of error-level diagnostics
-        warnings: Number of warning-level diagnostics
-        info: Number of info-level diagnostics
         results: List of individual MatlabLintResult objects
     """
 
-    errors: int = 0
-    warnings: int = 0
-    info: int = 0
-    results: list = field(default_factory=list)
+    results: list[MatlabLintResult] = field(default_factory=list)
+
+    @property
+    def errors(self) -> int:
+        return sum(1 for r in self.results if r.severity == "error")
+
+    @property
+    def warnings(self) -> int:
+        return sum(1 for r in self.results if r.severity == "warning")
+
+    @property
+    def info(self) -> int:
+        return sum(1 for r in self.results if r.severity == "info")
 
 
-# MATLAB helper function for running checkcode and returning structured results
 MATLAB_LINT_HELPER = """
 function results = mcp_lint(code_or_file, severity_filter)
 % MCP_LINT Run checkcode on MATLAB code and return structured results
@@ -78,7 +94,8 @@ function results = mcp_lint(code_or_file, severity_filter)
     end
 
     try
-        % Run checkcode with -id flag to include message IDs
+        % Run checkcode with -id flag so message IDs are available for
+        % severity classification
         info = checkcode(filepath, '-id');
 
         % Parse results into struct array
@@ -87,12 +104,27 @@ function results = mcp_lint(code_or_file, severity_filter)
 
         for i = 1:length(info)
             msg = info(i);
-            % Determine severity from message ID prefix
-            sev = 'warning';
-            if strncmp(msg.id, 'ERR', 3)
-                sev = 'error';
-            elseif strncmp(msg.id, 'INFO', 4)
-                sev = 'info';
+
+            % Use the severity field if checkcode provides it (numeric:
+            % 0=info, 1=warning, 2=error). Otherwise infer from the
+            % message ID prefix convention; this is a heuristic since
+            % checkcode does not guarantee ID naming patterns.
+            if isfield(msg, 'severity') && isnumeric(msg.severity)
+                switch msg.severity
+                    case 0
+                        sev = 'info';
+                    case 2
+                        sev = 'error';
+                    otherwise
+                        sev = 'warning';
+                end
+            else
+                sev = 'warning';
+                if strncmp(msg.id, 'ERR', 3)
+                    sev = 'error';
+                elseif strncmp(msg.id, 'INFO', 4)
+                    sev = 'info';
+                end
             end
 
             % Apply severity filter
@@ -118,21 +150,25 @@ function results = mcp_lint(code_or_file, severity_filter)
     end
 
     if cleanup_needed && exist(filepath, 'file')
-        delete(filepath);
+        try
+            delete(filepath);
+        catch
+            % Temp file will be cleaned up by OS; not critical
+        end
     end
 end
 """
 
 
 async def run_lint(
-    engine: object,
+    engine: MatlabEngine,
     code_or_file: str,
     severity_filter: str = "all",
 ) -> MatlabLintSummary:
     """Run MATLAB checkcode lint on code or a file and return structured results.
 
-    This function uses the mcp_lint MATLAB helper if available. It writes the
-    helper to the engine's helpers directory on first use.
+    This function invokes the mcp_lint MATLAB helper, writing it to the
+    engine's helpers directory on first use.
 
     For inline code strings the input is passed via a MATLAB workspace variable
     to avoid quoting issues with newlines and special characters.
@@ -142,13 +178,21 @@ async def run_lint(
         code_or_file: MATLAB code string or absolute path to a .m file
         severity_filter: Minimum severity to report. One of:
             'all'     - report everything (default)
-            'info'    - report info, warnings, and errors
             'warning' - report warnings and errors only
             'error'   - report errors only
 
     Returns:
         MatlabLintSummary with counts and list of MatlabLintResult objects
+
+    Raises:
+        ValueError: If severity_filter is not a valid option
     """
+    if severity_filter not in VALID_SEVERITY_FILTERS:
+        raise ValueError(
+            f"severity_filter must be one of {VALID_SEVERITY_FILTERS}, "
+            f"got: {severity_filter!r}"
+        )
+
     await engine.initialize()
     _setup_lint_helper(engine)
 
@@ -162,31 +206,33 @@ async def run_lint(
             nargout=1,
         )
 
-        # Clean up temporary workspace variables
         try:
             engine.eng.eval("clear _mcp_lint_input _mcp_lint_filter", nargout=0)
-        except Exception:
-            pass
+        except Exception as cleanup_exc:
+            logger.debug("Failed to clean up lint workspace variables: %s", cleanup_exc)
 
         return _parse_lint_results(raw)
 
     except Exception as exc:
-        # Return a single error result describing what went wrong
+        logger.error("MATLAB lint failed: %s", exc, exc_info=True)
         error_result = MatlabLintResult(
             line=0,
             column=0,
             severity="error",
-            id="MCP_LINT_ERROR",
+            msg_id="MCP_LINT_ERROR",
             message=str(exc),
         )
-        return MatlabLintSummary(errors=1, results=[error_result])
+        return MatlabLintSummary(results=[error_result])
 
 
-def _setup_lint_helper(engine: object) -> None:
-    """Write the mcp_lint MATLAB helper to the helpers directory if needed."""
+def _setup_lint_helper(engine: MatlabEngine) -> None:
+    """Write the mcp_lint MATLAB helper to the helpers directory.
+
+    Always writes to ensure the helper stays in sync with the Python code
+    after package upgrades.
+    """
     lint_helper = engine.helpers_dir / "mcp_lint.m"
-    if not lint_helper.exists():
-        lint_helper.write_text(MATLAB_LINT_HELPER)
+    lint_helper.write_text(MATLAB_LINT_HELPER)
 
 
 def _parse_lint_results(raw: object) -> MatlabLintSummary:
@@ -204,31 +250,31 @@ def _parse_lint_results(raw: object) -> MatlabLintSummary:
     if raw is None:
         return summary
 
-    # Normalise to a list of dicts / objects
     items = _normalise_struct_array(raw)
 
     for item in items:
         line = _get_field_int(item, "line", 0)
         column = _get_field_int(item, "column", 0)
-        severity = _get_field_str(item, "severity", "warning")
+        severity_raw = _get_field_str(item, "severity", "warning")
         msg_id = _get_field_str(item, "id", "")
         message = _get_field_str(item, "message", "")
+
+        if severity_raw not in ("error", "warning", "info"):
+            logger.warning(
+                "Unknown lint severity %r for message %s, defaulting to 'warning'",
+                severity_raw,
+                msg_id,
+            )
+            severity_raw = "warning"
 
         result = MatlabLintResult(
             line=line,
             column=column,
-            severity=severity,
-            id=msg_id,
+            severity=severity_raw,
+            msg_id=msg_id,
             message=message,
         )
         summary.results.append(result)
-
-        if severity == "error":
-            summary.errors += 1
-        elif severity == "info":
-            summary.info += 1
-        else:
-            summary.warnings += 1
 
     return summary
 
@@ -237,36 +283,41 @@ def _normalise_struct_array(raw: object) -> list:
     """Convert a MATLAB struct or struct array to a Python list of items."""
     if isinstance(raw, (list, tuple)):
         return list(raw)
-    # Single struct returned as dict by newer MATLAB Engine versions
+    # MATLAB Engine may return a single struct as a dict
     if isinstance(raw, dict):
         return [raw]
-    # Older engine may return an object - treat as single item
+    logger.debug(
+        "Unexpected MATLAB return type in lint results: %s (type: %s)",
+        raw,
+        type(raw).__name__,
+    )
     return [raw]
 
 
-def _get_field_int(item: object, field: str, default: int) -> int:
+def _get_field_int(item: object, field_name: str, default: int) -> int:
     """Extract an integer field from a dict or object."""
-    val = _get_field(item, field, default)
+    val = _get_field(item, field_name, default)
     try:
-        # MATLAB doubles come back as float or matlab.double
+        # MATLAB doubles may arrive as float, or as matlab.double which
+        # stores values in a _data attribute (a flat sequence).
         if hasattr(val, "_data"):
             data = val._data
             return int(data[0]) if data else default
         return int(val)
-    except (TypeError, ValueError, IndexError):
+    except (TypeError, ValueError, IndexError, OverflowError):
         return default
 
 
-def _get_field_str(item: object, field: str, default: str) -> str:
+def _get_field_str(item: object, field_name: str, default: str) -> str:
     """Extract a string field from a dict or object."""
-    val = _get_field(item, field, default)
+    val = _get_field(item, field_name, default)
     if val is None:
         return default
     return str(val)
 
 
-def _get_field(item: object, field: str, default: object) -> object:
+def _get_field(item: object, field_name: str, default: object) -> object:
     """Get a field from a dict or object attribute."""
     if isinstance(item, dict):
-        return item.get(field, default)
-    return getattr(item, field, default)
+        return item.get(field_name, default)
+    return getattr(item, field_name, default)
