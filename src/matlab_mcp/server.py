@@ -12,6 +12,7 @@ from mcp.server.fastmcp import Context, FastMCP, Image
 
 from .engine import MatlabEngine
 from .figure_analysis import DEFAULT_ANALYSIS_PROMPT
+from .matlab_compat import validate_environment
 from .models import CompressionConfig, FigureData
 
 
@@ -873,6 +874,23 @@ def run_server():
     signal.signal(signal.SIGTERM, signal_handler)
 
     print("MATLAB MCP Server is starting...")
+
+    # Validate Python/MATLAB version compatibility (warn but do not block)
+    # Use stderr to avoid corrupting MCP stdio transport
+    try:
+        env_status = validate_environment()
+        if not env_status["compatible"]:
+            print(
+                "WARNING: Python/MATLAB version compatibility issue detected.",
+                file=sys.stderr,
+            )
+            for rec in env_status["recommendations"]:
+                print(f"  {rec}", file=sys.stderr)
+        elif debug_mode:
+            for rec in env_status["recommendations"]:
+                logging.debug(rec)
+    except Exception as _compat_err:
+        logging.debug("Could not validate MATLAB compatibility: %s", _compat_err)
 
     try:
         # Initialize server first
