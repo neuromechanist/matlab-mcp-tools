@@ -1,6 +1,6 @@
 """MATLAB MCP Tool - A Model Context Protocol server for MATLAB integration."""
 
-__version__ = "0.4.1"
+__version__ = "0.4.2"
 
 from matlab_mcp.converters import (
     AttrDict,
