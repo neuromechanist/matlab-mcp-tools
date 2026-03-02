@@ -977,9 +977,11 @@ class MatlabEngine:
         Returns:
             Metadata dict if recovery succeeds, None if it fails
         """
-        is_struct_error = "scalar struct" in err_str.lower()
-        is_char_error = "char array" in err_str.lower() and (
-            "1-by-N" in err_str or "M-by-1" in err_str or "M-by-N" in err_str
+        err_lower = err_str.lower()
+        is_struct_error = "scalar struct" in err_lower
+        # MATLAB error: "char arrays returned from MATLAB must be 1-by-N or M-by-1"
+        is_char_error = "char array" in err_lower and (
+            "1-by-n" in err_lower or "m-by-1" in err_lower
         )
 
         if not (is_struct_error or is_char_error):
@@ -1019,7 +1021,7 @@ class MatlabEngine:
                     "class": var_class,
                     "size": size,
                     "numel": numel,
-                    "note": f"Multi-dimensional char array ({size[0]}x{size[1]}); cannot transfer directly",
+                    "note": f"Multi-dimensional char array ({'x'.join(str(s) for s in size)}); cannot transfer directly",
                 }
 
         except Exception:
