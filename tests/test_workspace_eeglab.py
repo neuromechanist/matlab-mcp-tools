@@ -1,387 +1,195 @@
-#!/usr/bin/env python3
+"""Test workspace retrieval tools with real EEGLAB data.
+
+NO MOCKS - All tests use real MATLAB/EEGLAB data via shared session engine.
 """
-Test selective workspace retrieval with real EEGLAB data.
-
-These tests verify that the new workspace tools (get_variable, get_struct_info,
-list_workspace_variables) work correctly with complex EEGLAB structures.
-
-NO MOCKS - All tests use real MATLAB/EEGLAB data.
-"""
-
-import asyncio
-import json
-import sys
-from pathlib import Path
 
 import pytest
 
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from matlab_mcp.engine import MatlabEngine
-
-
-class TestSelectiveVariableRetrieval:
-    """Test get_variable with EEGLAB data."""
-
-    @pytest.fixture(autouse=True)
-    def setup(self, eeglab_path, eeg_data_file):
-        """Set up test with EEGLAB data loaded."""
-        self.eeglab_path = eeglab_path
-        self.eeg_data_file = eeg_data_file
-        self.engine = MatlabEngine()
-
-    async def _load_eeg_data(self):
-        """Load EEG data into MATLAB workspace."""
-        await self.engine.initialize()
-
-        # Add EEGLAB to path
-        eeglab_code = f"""
-        addpath('{self.eeglab_path}');
-        eeglab nogui;
-        """
-        await self.engine.execute(eeglab_code)
-
-        # Load sample data
-        load_code = f"EEG = pop_loadset('{self.eeg_data_file}');"
-        result = await self.engine.execute(load_code)
-        assert result.error is None, f"Failed to load EEG: {result.error}"
+class TestGetVariable:
+    """Test get_variable with EEGLAB continuous dataset."""
 
     @pytest.mark.asyncio
-    async def test_get_scalar_fields_only(self):
-        """Test retrieving only scalar fields from EEG struct."""
-        await self._load_eeg_data()
-
-        # Get only scalar fields
-        result = await self.engine.get_variable(
-            "EEG", fields=["nbchan", "srate", "pnts", "trials"], max_elements=100
+    async def test_scalar_fields_exact_values(self, fresh_continuous_eeg):
+        """Scalar fields should return exact known values for continuous data."""
+        result = await fresh_continuous_eeg.get_variable(
+            "EEG", fields=["nbchan", "srate", "pnts", "trials"]
         )
+        assert result["nbchan"] == 32
+        assert result["srate"] == 128
+        assert result["pnts"] == 30504
+        assert result["trials"] == 1  # continuous = 1 trial
 
-        # Should have the requested fields
-        assert "nbchan" in result
-        assert "srate" in result
-        assert "pnts" in result
-
-        # Values should be scalars (or small arrays)
-        assert isinstance(result["nbchan"], (int, float, list))
-        assert isinstance(result["srate"], (int, float, list))
-
-        # Should NOT have the huge data field
+    @pytest.mark.asyncio
+    async def test_scalar_fields_exclude_data(self, eeglab_loaded_engine):
+        """Requesting scalar fields should not return the huge data array."""
+        result = await eeglab_loaded_engine.get_variable(
+            "EEG", fields=["nbchan", "srate"]
+        )
         assert "data" not in result
 
-        print(f"Scalar fields: {json.dumps(result, indent=2, default=str)}")
-
     @pytest.mark.asyncio
-    async def test_get_struct_info_without_values(self):
-        """Test get_struct_info returns field info without transferring data."""
-        await self._load_eeg_data()
-
-        # Get struct info
-        info = await self.engine.get_struct_info("EEG")
-
-        # Should have field information
-        assert "data" in info or "_mcp_error" not in info
-        assert "nbchan" in info or len(info) > 0
-
-        # Check that we got metadata, not actual data
-        if "data" in info:
-            data_info = info["data"]
-            # Should have size info (using var_size/var_numel to avoid MATLAB reserved names)
-            assert (
-                "var_size" in data_info
-                or "var_numel" in data_info
-                or "bytes" in data_info
-            )
-            # Should NOT have actual array values
-            assert not isinstance(data_info, list)
-
-        print(f"Struct info: {json.dumps(info, indent=2, default=str)}")
-
-    @pytest.mark.asyncio
-    async def test_depth_control(self):
-        """Test that depth=0 returns only field names."""
-        await self._load_eeg_data()
-
-        # Depth 0 should return info only
-        result = await self.engine.get_variable("EEG", depth=0)
-
-        # Should indicate it's a struct with fields listed
-        assert "_mcp_type" in result or "fields" in result or isinstance(result, dict)
-
-        print(f"Depth 0 result: {json.dumps(result, indent=2, default=str)}")
-
-    @pytest.mark.asyncio
-    async def test_nested_struct_access(self):
-        """Test accessing nested struct fields like EEG.chanlocs."""
-        await self._load_eeg_data()
-
-        # Get chanlocs info
-        result = await self.engine.get_variable("EEG.chanlocs", depth=0)
-
-        # Should return info about chanlocs struct array
-        assert result is not None
-        print(f"Chanlocs info: {json.dumps(result, indent=2, default=str)}")
-
-    @pytest.mark.asyncio
-    async def test_max_elements_limiting(self):
-        """Test that max_elements limits array transfer."""
-        await self._load_eeg_data()
-
-        # Get data with limited elements
-        result = await self.engine.get_variable("EEG.data", max_elements=50)
-
-        # Should be a summary, not full data
-        if isinstance(result, dict):
-            if "_mcp_type" in result:
-                assert result["_mcp_type"] in ["large_array", "medium_array"]
-                # Sample should be limited
-                if "sample" in result:
-                    assert len(result["sample"]) <= 50
-        else:
-            # If it returned full data, it should be small
-            if isinstance(result, list):
-                print(f"Returned list of length {len(result)}")
-
-        print(
-            f"Data with max_elements=50: {json.dumps(result, indent=2, default=str)[:500]}..."
+    async def test_depth_zero_returns_struct_info(self, eeglab_loaded_engine):
+        """depth=0 should return per-field metadata, not raw data values."""
+        result = await eeglab_loaded_engine.get_variable("EEG", depth=0)
+        assert isinstance(result, dict)
+        # Should have EEG field names as keys with metadata dicts as values
+        assert "nbchan" in result
+        assert "data" in result
+        # The data field should be metadata (dict with type info), not a raw array
+        data_entry = result["data"]
+        assert isinstance(data_entry, dict), (
+            f"depth=0 should return metadata for data, got {type(data_entry)}"
         )
+        assert "bytes" in data_entry or "is_numeric" in data_entry
 
     @pytest.mark.asyncio
-    async def test_token_savings(self):
-        """Compare token usage between full workspace and selective retrieval."""
-        await self._load_eeg_data()
+    async def test_nested_struct_chanlocs(self, eeglab_loaded_engine):
+        """Accessing EEG.chanlocs should return struct array info."""
+        result = await eeglab_loaded_engine.get_variable("EEG.chanlocs", depth=0)
+        assert result is not None
+        assert isinstance(result, dict)
+
+    @pytest.mark.asyncio
+    async def test_data_max_elements_limits_transfer(self, eeglab_loaded_engine):
+        """EEG.data with max_elements=50 should limit what is transferred."""
+        result = await eeglab_loaded_engine.get_variable("EEG.data", max_elements=50)
+        if isinstance(result, dict) and "_mcp_type" in result:
+            assert result["_mcp_type"] in ["large_array", "medium_array"]
+            if "sample" in result:
+                assert len(result["sample"]) <= 50
+        elif isinstance(result, list):
+            # Raw list should be limited, not the full 32x30504 array
+            assert len(result) <= 50, (
+                f"max_elements=50 but got list of {len(result)} elements"
+            )
+        else:
+            # String representation or other format is acceptable
+            assert isinstance(result, (dict, str)), (
+                f"Unexpected result type: {type(result)}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_nonexistent_variable(self, eeglab_loaded_engine):
+        """Requesting a variable that does not exist should return error."""
+        result = await eeglab_loaded_engine.get_variable("totally_nonexistent_xyz")
+        assert "_mcp_error" in result
+
+    @pytest.mark.asyncio
+    async def test_token_savings(self, eeglab_loaded_engine):
+        """Selective retrieval should use far fewer tokens than full workspace."""
+        import json
 
         def estimate_tokens(data):
             return len(json.dumps(data, default=str)) // 4
 
-        # Method 1: Full workspace (old way)
-        full_workspace = await self.engine.get_workspace()
-        full_tokens = estimate_tokens(full_workspace)
-
-        # Method 2: Selective retrieval (new way)
-        selective = await self.engine.get_variable(
+        full = await eeglab_loaded_engine.get_workspace()
+        selective = await eeglab_loaded_engine.get_variable(
             "EEG", fields=["nbchan", "srate", "pnts", "xmin", "xmax"]
         )
-        selective_tokens = estimate_tokens(selective)
+        assert estimate_tokens(selective) < estimate_tokens(full)
 
-        print(f"Full workspace tokens: {full_tokens:,}")
-        print(f"Selective retrieval tokens: {selective_tokens:,}")
-        print(f"Token savings: {(1 - selective_tokens / full_tokens) * 100:.1f}%")
 
-        # Selective should be significantly smaller
-        assert selective_tokens < full_tokens
+class TestGetStructInfo:
+    """Test get_struct_info with EEGLAB structures."""
 
-    def teardown_method(self, method):
-        """Clean up after each test."""
-        if hasattr(self, "engine") and self.engine.eng is not None:
-            self.engine.close()
+    @pytest.mark.asyncio
+    async def test_eeg_struct_has_expected_fields(self, eeglab_loaded_engine):
+        """EEG struct should contain core fields with type metadata."""
+        info = await eeglab_loaded_engine.get_struct_info("EEG")
+        for field in ["data", "chanlocs", "event", "nbchan", "srate", "pnts"]:
+            assert field in info, f"Missing expected field: {field}"
+
+    @pytest.mark.asyncio
+    async def test_eeg_field_class_types(self, eeglab_loaded_engine):
+        """Fields should report correct MATLAB class types."""
+        info = await eeglab_loaded_engine.get_struct_info("EEG")
+        # data should be a numeric (single or double)
+        if isinstance(info.get("data"), dict) and "class" in info["data"]:
+            assert info["data"]["class"] in ("single", "double")
+        # chanlocs should be a struct
+        if isinstance(info.get("chanlocs"), dict) and "is_struct" in info["chanlocs"]:
+            assert info["chanlocs"]["is_struct"] is True
+
+    @pytest.mark.asyncio
+    async def test_chanlocs_fields(self, eeglab_loaded_engine):
+        """EEG.chanlocs should have standard channel location fields."""
+        info = await eeglab_loaded_engine.get_struct_info("EEG.chanlocs")
+        expected = {"labels", "theta", "radius", "X", "Y", "Z"}
+        found = set(info.keys())
+        # At least most of the expected fields should be present
+        overlap = expected & found
+        assert len(overlap) >= 4, f"Only found {overlap} of {expected}"
+
+    @pytest.mark.asyncio
+    async def test_nonexistent_variable_error(self, eeglab_loaded_engine):
+        """get_struct_info on nonexistent variable should return error."""
+        info = await eeglab_loaded_engine.get_struct_info("nonexistent_var_xyz")
+        assert "_mcp_error" in info
 
 
 class TestListWorkspaceVariables:
-    """Test list_workspace_variables with filtering."""
-
-    @pytest.fixture(autouse=True)
-    def setup(self, eeglab_path, eeg_data_file):
-        """Set up test with EEGLAB."""
-        self.eeglab_path = eeglab_path
-        self.eeg_data_file = eeg_data_file
-        self.engine = MatlabEngine()
-
-    async def _setup_workspace(self):
-        """Create multiple variables in workspace."""
-        await self.engine.initialize()
-
-        # Add EEGLAB to path
-        eeglab_code = f"""
-        addpath('{self.eeglab_path}');
-        eeglab nogui;
-        """
-        await self.engine.execute(eeglab_code)
-
-        # Load EEG and create some additional variables
-        setup_code = f"""
-        EEG = pop_loadset('{self.eeg_data_file}');
-        EEG_backup = EEG;
-        data_matrix = rand(100, 100);
-        event_types = {{'stimulus', 'response', 'feedback'}};
-        sample_rate = 128;
-        """
-        result = await self.engine.execute(setup_code)
-        assert result.error is None
+    """Test list_workspace_variables with EEGLAB workspace."""
 
     @pytest.mark.asyncio
-    async def test_list_all_variables(self):
-        """Test listing all variables without filter."""
-        await self._setup_workspace()
+    async def test_eeg_listed_as_struct(self, eeglab_loaded_engine):
+        """EEG should appear in workspace listing as a struct."""
+        variables = await eeglab_loaded_engine.list_workspace_variables()
+        names = [v["name"] for v in variables]
+        assert "EEG" in names
+        eeg_entry = next(v for v in variables if v["name"] == "EEG")
+        assert eeg_entry["class"] == "struct"
 
-        variables = await self.engine.list_workspace_variables()
-
-        # Should have multiple variables
+    @pytest.mark.asyncio
+    async def test_variable_entry_structure(self, eeglab_loaded_engine):
+        """Each variable entry should have name, class, size, bytes."""
+        variables = await eeglab_loaded_engine.list_workspace_variables()
         assert len(variables) > 0
-
-        # Check structure
         for var in variables:
             assert "name" in var
             assert "class" in var
             assert "size" in var
             assert "bytes" in var
 
-        print(f"All variables: {json.dumps(variables, indent=2, default=str)}")
-
     @pytest.mark.asyncio
-    async def test_filter_by_pattern(self):
-        """Test filtering variables by name pattern."""
-        await self._setup_workspace()
-
-        # Filter for EEG* variables
-        eeg_vars = await self.engine.list_workspace_variables(pattern="^EEG")
-
-        # Should find EEG and EEG_backup
+    async def test_filter_by_pattern(self, eeglab_loaded_engine):
+        """Pattern filter should match variable names."""
+        eeg_vars = await eeglab_loaded_engine.list_workspace_variables(pattern="^EEG")
         names = [v["name"] for v in eeg_vars]
-        assert "EEG" in names or len(eeg_vars) > 0
-
-        print(f"EEG* variables: {names}")
+        assert "EEG" in names
+        # All returned names should start with EEG
+        for name in names:
+            assert name.startswith("EEG"), f"{name} does not match ^EEG"
 
     @pytest.mark.asyncio
-    async def test_filter_by_type(self):
-        """Test filtering variables by type."""
-        await self._setup_workspace()
-
-        # Filter for struct variables only
-        struct_vars = await self.engine.list_workspace_variables(var_type="struct")
-
-        # All should be structs
+    async def test_filter_by_struct_type(self, eeglab_loaded_engine):
+        """Type filter for struct should return only structs."""
+        struct_vars = await eeglab_loaded_engine.list_workspace_variables(
+            var_type="struct"
+        )
         for var in struct_vars:
             assert var["is_struct"] is True
 
-        print(f"Struct variables: {[v['name'] for v in struct_vars]}")
+
+class TestGetWorkspace:
+    """Test get_workspace with EEGLAB data."""
 
     @pytest.mark.asyncio
-    async def test_filter_by_pattern_and_type(self):
-        """Test filtering by both pattern and type."""
-        await self._setup_workspace()
-
-        # Filter for numeric variables with 'data' in name
-        data_vars = await self.engine.list_workspace_variables(
-            pattern="data", var_type="double"
-        )
-
-        print(f"Numeric 'data' variables: {[v['name'] for v in data_vars]}")
-
-    def teardown_method(self, method):
-        """Clean up after each test."""
-        if hasattr(self, "engine") and self.engine.eng is not None:
-            self.engine.close()
-
-
-class TestGetStructInfo:
-    """Test get_struct_info with complex EEGLAB structures."""
-
-    @pytest.fixture(autouse=True)
-    def setup(self, eeglab_path, eeg_data_file):
-        """Set up test with EEGLAB."""
-        self.eeglab_path = eeglab_path
-        self.eeg_data_file = eeg_data_file
-        self.engine = MatlabEngine()
-
-    async def _load_eeg_data(self):
-        """Load EEG data into MATLAB workspace."""
-        await self.engine.initialize()
-
-        eeglab_code = f"""
-        addpath('{self.eeglab_path}');
-        eeglab nogui;
-        EEG = pop_loadset('{self.eeg_data_file}');
-        """
-        result = await self.engine.execute(eeglab_code)
-        assert result.error is None
+    async def test_workspace_contains_eeg(self, eeglab_loaded_engine):
+        """Full workspace should include EEG variable."""
+        ws = await eeglab_loaded_engine.get_workspace()
+        assert "EEG" in ws
 
     @pytest.mark.asyncio
-    async def test_get_eeg_struct_info(self):
-        """Test getting info for main EEG struct."""
-        await self._load_eeg_data()
-
-        info = await self.engine.get_struct_info("EEG")
-
-        # Should have main EEG fields
-        found_fields = list(info.keys())
-
-        print(f"EEG fields: {found_fields}")
-        print(f"Full info: {json.dumps(info, indent=2, default=str)[:2000]}...")
-
-        # At least some expected fields should be present
-        assert len(found_fields) > 0
-
-    @pytest.mark.asyncio
-    async def test_struct_field_types(self):
-        """Test that struct info includes type information."""
-        await self._load_eeg_data()
-
-        info = await self.engine.get_struct_info("EEG")
-
-        # Check that we have type info for fields
-        for field_name, field_info in info.items():
-            if isinstance(field_info, dict):
-                # Should have class or type info
-                has_type_info = (
-                    "class" in field_info
-                    or "is_struct" in field_info
-                    or "is_numeric" in field_info
+    async def test_non_scalar_struct_recovery(self, eeglab_loaded_engine):
+        """Non-scalar structs (chanlocs, event) should have metadata, not error strings."""
+        ws = await eeglab_loaded_engine.get_workspace()
+        eeg = ws.get("EEG", {})
+        if isinstance(eeg, dict):
+            # If chanlocs is present, it should not be a raw error string
+            chanlocs = eeg.get("chanlocs")
+            if chanlocs is not None and isinstance(chanlocs, str):
+                # Error strings typically start with "Error" or contain traceback
+                assert not chanlocs.startswith("Error"), (
+                    "chanlocs should have metadata, not error string"
                 )
-                if has_type_info:
-                    print(f"  {field_name}: {field_info.get('class', 'unknown')}")
-
-    @pytest.mark.asyncio
-    async def test_nested_struct_info(self):
-        """Test getting info for nested struct (EEG.chanlocs)."""
-        await self._load_eeg_data()
-
-        # Get info for chanlocs (struct array)
-        info = await self.engine.get_struct_info("EEG.chanlocs")
-
-        print(f"chanlocs info: {json.dumps(info, indent=2, default=str)}")
-
-    @pytest.mark.asyncio
-    async def test_nonexistent_variable(self):
-        """Test error handling for nonexistent variable."""
-        await self._load_eeg_data()
-
-        info = await self.engine.get_struct_info("nonexistent_var")
-
-        # Should return an error
-        assert "_mcp_error" in info
-        print(f"Error response: {info}")
-
-    def teardown_method(self, method):
-        """Clean up after each test."""
-        if hasattr(self, "engine") and self.engine.eng is not None:
-            self.engine.close()
-
-
-if __name__ == "__main__":
-    # Run a quick test
-    async def quick_test():
-        engine = MatlabEngine()
-        await engine.initialize()
-
-        # Create a simple struct for testing
-        result = await engine.execute(
-            "test_struct = struct('name', 'test', 'value', 42, 'data', rand(10,10));"
-        )
-        print(f"Created struct: {result.error or 'OK'}")
-
-        # Test get_struct_info
-        info = await engine.get_struct_info("test_struct")
-        print(f"Struct info: {json.dumps(info, indent=2, default=str)}")
-
-        # Test get_variable with fields
-        result = await engine.get_variable("test_struct", fields=["name", "value"])
-        print(f"Selected fields: {json.dumps(result, indent=2, default=str)}")
-
-        # Test list_workspace_variables
-        variables = await engine.list_workspace_variables()
-        print(f"Workspace: {json.dumps(variables, indent=2, default=str)}")
-
-        engine.close()
-
-    asyncio.run(quick_test())

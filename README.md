@@ -1,6 +1,6 @@
 # MATLAB MCP Tool
 
-A Model Context Protocol (MCP) server that provides tools for developing and running MATLAB files. This tool integrates with Cline and other MCP-compatible clients to provide interactive MATLAB development capabilities.
+A Model Context Protocol (MCP) server that provides tools for developing and running MATLAB files. Integrates with Claude Code, Cursor, and other MCP-compatible clients.
 
 ## Prerequisites
 
@@ -10,16 +10,11 @@ A Model Context Protocol (MCP) server that provides tools for developing and run
 
 ## Features
 
-1. **Execute MATLAB Scripts**
-   - Run complete MATLAB scripts
-   - Execute individual script sections
-   - Maintain workspace context between executions
-   - Capture and display plots
-
-2. **Section-based Execution**
-   - Execute specific sections of MATLAB files
-   - Support for cell mode (%% delimited sections)
-   - Maintain workspace context between sections
+1. **Script Execution** - Run complete scripts, individual sections (by index, title, or line range), maintain workspace context between executions, capture plots
+2. **Workspace Management** - Get full workspace, retrieve specific variables with field/depth/size control, inspect struct metadata, list and filter variables by name pattern or type
+3. **Figure Analysis** - Extract figure metadata (axes, labels, legends), get raw plot data, prepare figures for LLM-based analysis with custom prompts
+4. **Code Quality** - Lint MATLAB code via `checkcode` with severity filtering, supports inline code and file paths
+5. **Script Management** - Create scripts, list sections with previews, read script content via MCP resource
 
 ## Installation
 
@@ -126,60 +121,48 @@ This is equivalent to running:
 python -m matlab_mcp.server
 ```
 
-You should see a startup message listing the available tools and confirming the server is running:
-```
-MATLAB MCP Server is running...
-Available tools:
-  - execute_script: Execute MATLAB code or script file
-  - execute_script_section: Execute specific sections of a MATLAB script
-  - get_script_sections: Get information about script sections
-  - create_matlab_script: Create a new MATLAB script
-  - get_workspace: Get current MATLAB workspace variables
+You should see a startup message confirming the server is running with 15 tools available.
 
-Use the tools with Cline or other MCP-compatible clients.
-```
+2. Configure your MCP client. For **Claude Code**, add to `.mcp.json`:
 
-2. Use the provided MCP configuration (see [Installation](#installation)) file to configure Cline/Cursor:
 ```json
 {
   "mcpServers": {
     "matlab": {
-      "command": "matlab-mcp-server",
-      "args": [],
+      "command": "/path/to/matlab-mcp-tools/.venv/bin/matlab-mcp-server",
       "env": {
-        "MATLAB_PATH": "${MATLAB_PATH}",
-        "PATH": "${MATLAB_PATH}/bin:${PATH}"
-      },
-      "disabled": false,
-      "autoApprove": [
-        "list_tools",
-        "get_script_sections"
-      ]
+        "MATLAB_PATH": "/Applications/MATLAB_R2024b.app"
+      }
     }
   }
 }
 ```
 
-Hint: You can find the MATLAB engine installation path by running `python -c "import matlab; print(matlab.__file__)"`.
+For **Cursor**, use the auto-generated `mcp-pip.json` or add to `~/.cursor/mcp.json`.
 
-3. Available Tools:
+Hint: Find the MATLAB engine path with `python -c "import matlab; print(matlab.__file__)"`.
 
-- **execute_matlab_script**
-  ```json
-  {
-    "script": "x = 1:10;\nplot(x, x.^2);",
-    "isFile": false
-  }
-  ```
+3. **Available Tools (15):**
 
-- **execute_matlab_section**
-  ```json
-  {
-    "filePath": "analysis.m",
-    "sectionStart": 1,
-    "sectionEnd": 10
-  }
-  ```
+| Category | Tool | Description |
+|----------|------|-------------|
+| Scripts | `execute_script` | Run MATLAB code or script file |
+| | `execute_section` | Execute by line range |
+| | `execute_section_by_index` | Execute by section index (0-based) |
+| | `execute_section_by_title` | Execute by section title (partial match) |
+| | `get_script_sections` | List sections with titles and previews |
+| | `create_matlab_script` | Create a new .m file |
+| Workspace | `get_workspace` | Get all workspace variables |
+| | `get_variable` | Get specific variable (with field/depth/size control) |
+| | `get_struct_info` | Get struct field metadata without data transfer |
+| | `list_workspace_variables` | List/filter variables by name pattern or type |
+| Figures | `get_figure_metadata` | Extract axes, labels, legends, subplot info |
+| | `get_plot_data` | Get raw x/y/z data from plot lines |
+| | `analyze_figure` | Prepare figure image + metadata for LLM analysis |
+| | `get_analysis_prompt` | Get/customize the figure analysis prompt |
+| Quality | `matlab_lint` | Run checkcode on code or files |
+
+**Resource:** `matlab://scripts/{script_name}` - Read script content
 
 ## Examples
 
@@ -204,11 +187,11 @@ grid on;
 text(pi, 0, '\leftarrow \pi', 'FontSize', 12);
 ```
 
-To execute this script using the MCP tool:
+To execute this script using the `execute_script` tool:
 ```json
 {
     "script": "test_plot.m",
-    "isFile": true
+    "is_file": true
 }
 ```
 
@@ -260,16 +243,23 @@ grid on;
 sgtitle('Signal Analysis');
 ```
 
-To execute specific sections:
+To execute specific sections using `execute_section_by_index`:
 ```json
 {
-    "filePath": "section_test.m",
-    "sectionStart": 1,
-    "sectionEnd": 2
+    "file_path": "section_test.m",
+    "section_index": 0
 }
 ```
 
-This will run sections 1 and 2, generating the data and calculating statistics. The output will include:
+Or by title using `execute_section_by_title`:
+```json
+{
+    "file_path": "section_test.m",
+    "section_title": "Data Generation"
+}
+```
+
+The output will include:
 ```
 Generated 100 data points
 Statistics:
