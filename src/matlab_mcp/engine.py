@@ -1688,11 +1688,18 @@ class MatlabEngine:
             raise ValueError(f"No sections found in {file_path}")
 
         # Find section by title (case-insensitive partial match)
-        search_title = section_title.lower().strip()
+        search_title = section_title.strip()
+        if not search_title:
+            raise ValueError(
+                "section_title must not be empty. "
+                "Use get_script_sections to see available section titles."
+            )
+
+        search_lower = search_title.lower()
         matching_sections = []
 
         for idx, (start_line, end_line, title) in enumerate(sections):
-            if search_title in title.lower():
+            if search_lower in title.lower():
                 matching_sections.append((idx, start_line, end_line, title))
 
         if not matching_sections:

@@ -294,6 +294,9 @@ async def execute_section_by_index(
         if scripts_path.exists():
             script_path = scripts_path
 
+    if not script_path.exists():
+        raise FileNotFoundError(f"Script not found: {file_path}")
+
     if ctx:
         ctx.info(f"Executing section index {section_index}")
 
@@ -357,6 +360,9 @@ async def execute_section_by_title(
         scripts_path = server.scripts_dir / file_path
         if scripts_path.exists():
             script_path = scripts_path
+
+    if not script_path.exists():
+        raise FileNotFoundError(f"Script not found: {file_path}")
 
     if ctx:
         ctx.info(f"Finding and executing section: '{section_title}'")
