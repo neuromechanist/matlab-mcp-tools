@@ -187,11 +187,11 @@ grid on;
 text(pi, 0, '\leftarrow \pi', 'FontSize', 12);
 ```
 
-To execute this script using the MCP tool:
+To execute this script using the `execute_script` tool:
 ```json
 {
     "script": "test_plot.m",
-    "isFile": true
+    "is_file": true
 }
 ```
 
@@ -243,16 +243,23 @@ grid on;
 sgtitle('Signal Analysis');
 ```
 
-To execute specific sections:
+To execute specific sections using `execute_section_by_index`:
 ```json
 {
-    "filePath": "section_test.m",
-    "sectionStart": 1,
-    "sectionEnd": 2
+    "file_path": "section_test.m",
+    "section_index": 0
 }
 ```
 
-This will run sections 1 and 2, generating the data and calculating statistics. The output will include:
+Or by title using `execute_section_by_title`:
+```json
+{
+    "file_path": "section_test.m",
+    "section_title": "Data Generation"
+}
+```
+
+The output will include:
 ```
 Generated 100 data points
 Statistics:

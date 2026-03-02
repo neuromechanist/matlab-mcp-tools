@@ -1,7 +1,7 @@
 """Test figure analysis tools with real EEGLAB plots.
 
 NO MOCKS - All tests use real MATLAB/EEGLAB data via shared session engine.
-Uses the epoched+ICA dataset for richer plot capabilities.
+Figure/plot tests use the epoched+ICA dataset; lint tests use the continuous dataset.
 """
 
 import pytest
@@ -68,7 +68,6 @@ class TestFigureMetadataExtraction:
     @pytest.mark.asyncio
     async def test_simple_plot_metadata(self, eeglab_epochs_engine):
         """Verify metadata for a simple labeled plot."""
-        # Reuse the figure from previous test or create fresh
         code = (
             "close all; "
             "figure; "

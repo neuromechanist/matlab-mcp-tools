@@ -30,11 +30,18 @@ class TestGetVariable:
 
     @pytest.mark.asyncio
     async def test_depth_zero_returns_struct_info(self, eeglab_loaded_engine):
-        """depth=0 should return struct metadata, not actual values."""
+        """depth=0 should return per-field metadata, not raw data values."""
         result = await eeglab_loaded_engine.get_variable("EEG", depth=0)
         assert isinstance(result, dict)
-        # Should indicate it's a struct with type info
-        assert "_mcp_type" in result or "fields" in result or len(result) > 5
+        # Should have EEG field names as keys with metadata dicts as values
+        assert "nbchan" in result
+        assert "data" in result
+        # The data field should be metadata (dict with type info), not a raw array
+        data_entry = result["data"]
+        assert isinstance(data_entry, dict), (
+            f"depth=0 should return metadata for data, got {type(data_entry)}"
+        )
+        assert "bytes" in data_entry or "is_numeric" in data_entry
 
     @pytest.mark.asyncio
     async def test_nested_struct_chanlocs(self, eeglab_loaded_engine):
@@ -47,13 +54,20 @@ class TestGetVariable:
     async def test_data_max_elements_limits_transfer(self, eeglab_loaded_engine):
         """EEG.data with max_elements=50 should limit what is transferred."""
         result = await eeglab_loaded_engine.get_variable("EEG.data", max_elements=50)
-        # May return dict (summary) or truncated data (string/list)
         if isinstance(result, dict) and "_mcp_type" in result:
             assert result["_mcp_type"] in ["large_array", "medium_array"]
             if "sample" in result:
                 assert len(result["sample"]) <= 50
-        # If it returns raw data, it should be limited in size
-        # (not the full 32x30504 array)
+        elif isinstance(result, list):
+            # Raw list should be limited, not the full 32x30504 array
+            assert len(result) <= 50, (
+                f"max_elements=50 but got list of {len(result)} elements"
+            )
+        else:
+            # String representation or other format is acceptable
+            assert isinstance(result, (dict, str)), (
+                f"Unexpected result type: {type(result)}"
+            )
 
     @pytest.mark.asyncio
     async def test_nonexistent_variable(self, eeglab_loaded_engine):

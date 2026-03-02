@@ -14,11 +14,16 @@ def _find_eeglab_path():
     """Resolve EEGLAB installation path.
 
     Check order: EEGLAB_PATH env var, ../eeg/eeglab, ../eeglab (legacy).
+    Raises FileNotFoundError if EEGLAB_PATH is set but invalid.
     """
     env_path = os.environ.get("EEGLAB_PATH")
     if env_path:
         p = Path(env_path)
-        return p if p.exists() else None
+        if not p.exists():
+            raise FileNotFoundError(
+                f"EEGLAB_PATH set to '{env_path}' but path does not exist"
+            )
+        return p
 
     base = Path(__file__).parent.parent.parent
     for candidate in ["eeg/eeglab", "eeglab"]:
@@ -40,13 +45,19 @@ def eeglab_path():
 @pytest.fixture(scope="session")
 def sample_data_path(eeglab_path):
     """Path to EEGLAB sample data directory."""
-    return eeglab_path / "sample_data"
+    path = eeglab_path / "sample_data"
+    if not path.exists():
+        pytest.skip(f"EEGLAB sample_data not found at {path}")
+    return path
 
 
 @pytest.fixture(scope="session")
 def tutorial_scripts_path(eeglab_path):
     """Path to EEGLAB tutorial scripts directory."""
-    return eeglab_path / "tutorial_scripts"
+    path = eeglab_path / "tutorial_scripts"
+    if not path.exists():
+        pytest.skip(f"EEGLAB tutorial_scripts not found at {path}")
+    return path
 
 
 @pytest.fixture(scope="session")
@@ -74,6 +85,10 @@ def eeglab_loaded_engine(matlab_engine, eeglab_path, sample_data_path):
 
     Loads eeglab_data.set (32ch, 128Hz continuous) into the EEG variable.
     Session-scoped so EEGLAB init + data load happens only once.
+
+    NOTE: Tests that execute MATLAB code may modify the EEG variable (e.g.,
+    epoching, resampling). Tests needing exact continuous-data values should
+    use the ``fresh_continuous_eeg`` fixture instead.
     """
     import asyncio
 
