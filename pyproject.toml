@@ -1,7 +1,7 @@
 [project]
 name = "matlab-mcp-tools"
 version = "0.4.0"
-description = "MCP server for MATLAB integration with Cline"
+description = "MCP server for MATLAB integration with AI workflows"
 authors = [
     { name = "Seyed Yahya Shirazi", email = "shirazi@ieee.org" }
 ]
