@@ -876,12 +876,16 @@ def run_server():
     print("MATLAB MCP Server is starting...")
 
     # Validate Python/MATLAB version compatibility (warn but do not block)
+    # Use stderr to avoid corrupting MCP stdio transport
     try:
         env_status = validate_environment()
         if not env_status["compatible"]:
-            print("WARNING: Python/MATLAB version compatibility issue detected.")
+            print(
+                "WARNING: Python/MATLAB version compatibility issue detected.",
+                file=sys.stderr,
+            )
             for rec in env_status["recommendations"]:
-                print(f"  {rec}")
+                print(f"  {rec}", file=sys.stderr)
         elif debug_mode:
             for rec in env_status["recommendations"]:
                 logging.debug(rec)

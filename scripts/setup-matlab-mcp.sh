@@ -4,13 +4,16 @@ set -euo pipefail
 # Define variables
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_NAME=".venv"
-VENV_PATH="$SCRIPT_DIR/$VENV_NAME"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+VENV_PATH="$PROJECT_DIR/$VENV_NAME"
 
 # ---------------------------------------------------------------------------
 # MATLAB-Python compatibility table
 # Format: MATLAB_VERSION PYTHON_VERSIONS(colon-separated) ENGINE_PREFIX
 # ---------------------------------------------------------------------------
 declare -A MATLAB_PYTHON_VERSIONS=(
+    ["R2025b"]="3.12:3.11:3.10:3.9"
+    ["R2025a"]="3.12:3.11:3.10:3.9"
     ["R2024b"]="3.12:3.11:3.10:3.9"
     ["R2024a"]="3.11:3.10:3.9"
     ["R2023b"]="3.11:3.10:3.9"
@@ -19,10 +22,12 @@ declare -A MATLAB_PYTHON_VERSIONS=(
 )
 
 declare -A MATLAB_ENGINE_VERSION=(
+    ["R2025b"]="25.2"
+    ["R2025a"]="25.1"
     ["R2024b"]="24.2"
     ["R2024a"]="24.1"
     ["R2023b"]="23.2"
-    ["R2023a"]="23.1"
+    ["R2023a"]="9.14"
     ["R2022b"]="9.13"
 )
 
@@ -33,19 +38,19 @@ auto_detect_matlab() {
     local found_path=""
 
     if [[ "$(uname)" == "Darwin" ]]; then
-        # Check /Applications first
+        # Check /Applications (globs sort alphabetically; keep last = newest)
         for p in /Applications/MATLAB_R*.app; do
-            [ -d "$p" ] && found_path="$p" && break
+            [ -d "$p" ] && found_path="$p"
         done
         # Check volumes if not found yet
         if [ -z "$found_path" ]; then
             for vol in /Volumes/*/Applications/MATLAB_R*.app; do
-                [ -d "$vol" ] && found_path="$vol" && break
+                [ -d "$vol" ] && found_path="$vol"
             done
         fi
     elif [[ "$(uname)" == "Linux" ]]; then
         for p in /usr/local/MATLAB/R*; do
-            [ -d "$p" ] && found_path="$p" && break
+            [ -d "$p" ] && found_path="$p"
         done
     fi
 

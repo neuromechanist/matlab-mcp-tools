@@ -8,10 +8,12 @@ from pathlib import Path
 # Compatibility mapping: MATLAB version -> (python_versions, matlabengine_version_prefix)
 # Python versions listed from most recent to oldest (preferred first).
 MATLAB_COMPAT: dict[str, tuple[list[str], str]] = {
+    "R2025b": (["3.12", "3.11", "3.10", "3.9"], "25.2"),
+    "R2025a": (["3.12", "3.11", "3.10", "3.9"], "25.1"),
     "R2024b": (["3.12", "3.11", "3.10", "3.9"], "24.2"),
     "R2024a": (["3.11", "3.10", "3.9"], "24.1"),
     "R2023b": (["3.11", "3.10", "3.9"], "23.2"),
-    "R2023a": (["3.10", "3.9", "3.8"], "23.1"),
+    "R2023a": (["3.10", "3.9", "3.8"], "9.14"),
     "R2022b": (["3.10", "3.9", "3.8"], "9.13"),
 }
 
