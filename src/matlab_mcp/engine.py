@@ -953,9 +953,81 @@ class MatlabEngine:
                         )
 
             except Exception as e:
-                workspace[var] = f"<Error reading variable: {str(e)}>"
+                err_str = str(e)
+                # Try to recover metadata for known problematic types
+                recovered = self._recover_variable_metadata(var, err_str)
+                workspace[var] = (
+                    recovered
+                    if recovered is not None
+                    else f"<Error reading variable: {err_str}>"
+                )
 
         return workspace
+
+    def _recover_variable_metadata(self, var: str, err_str: str) -> dict | None:
+        """Attempt to recover metadata for variables that fail direct access.
+
+        Handles non-scalar structs and complex char arrays by querying MATLAB
+        for type and size information instead of the value itself.
+
+        Args:
+            var: MATLAB variable name
+            err_str: Original error string from failed access
+
+        Returns:
+            Metadata dict if recovery succeeds, None if it fails
+        """
+        err_lower = err_str.lower()
+        is_struct_error = "scalar struct" in err_lower
+        # MATLAB error: "char arrays returned from MATLAB must be 1-by-N or M-by-1"
+        is_char_error = "char array" in err_lower and (
+            "1-by-n" in err_lower or "m-by-1" in err_lower
+        )
+
+        if not (is_struct_error or is_char_error):
+            return None
+
+        try:
+            var_class = self.eng.eval(f"class({var})", nargout=1)
+            size_result = self.eng.eval(f"size({var})", nargout=1)
+            size = (
+                list(size_result._data)
+                if hasattr(size_result, "_data")
+                else list(size_result)
+            )
+            numel = int(self.eng.eval(f"numel({var})", nargout=1))
+
+            if is_struct_error and var_class == "struct":
+                try:
+                    field_names_result = self.eng.eval(
+                        f"fieldnames({var}(1))", nargout=1
+                    )
+                    field_names = list(field_names_result) if field_names_result else []
+                except Exception:
+                    field_names = []
+
+                return {
+                    "_mcp_type": "non_scalar_struct",
+                    "class": var_class,
+                    "size": size,
+                    "numel": numel,
+                    "field_names": field_names,
+                    "note": f"Non-scalar struct with {numel} elements; use get_struct_info for details",
+                }
+
+            if is_char_error and var_class == "char":
+                return {
+                    "_mcp_type": "complex_char",
+                    "class": var_class,
+                    "size": size,
+                    "numel": numel,
+                    "note": f"Multi-dimensional char array ({'x'.join(str(s) for s in size)}); cannot transfer directly",
+                }
+
+        except Exception:
+            pass
+
+        return None
 
     async def get_variable(
         self,
